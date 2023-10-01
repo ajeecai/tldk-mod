@@ -23,7 +23,7 @@ ifeq ($(TLDK_ROOT),)
 $(error "Please define TLDK_ROOT environment variable")
 endif
 
-include $(RTE_SDK)/mk/rte.vars.mk
+include $(RTE_SDK)/dpdk_20.05_mk/rte.vars.mk
 
 # binary name
 APP = test_dring

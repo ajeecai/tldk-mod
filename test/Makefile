@@ -19,7 +19,7 @@ ifeq ($(TLDK_ROOT),)
 $(error "Please define TLDK_SDK environment variable")
 endif
 
-include $(RTE_SDK)/mk/rte.vars.mk
+include $(RTE_SDK)/dpdk_20.05_mk/rte.vars.mk
 
 DIRS-y += dring
 DIRS-y += gtest

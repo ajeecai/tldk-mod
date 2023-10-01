@@ -24,84 +24,156 @@ extern "C" {
 
 #if RTE_VERSION >= RTE_VERSION_NUM(17, 5, 0, 0)
 
-static inline uint32_t
-_rte_ring_mp_enqueue_bulk(struct rte_ring *r, void * const *obj_table,
-	uint32_t n)
-{
-	uint32_t rc;
+#define ENQUEUE_PTRS(r, ring_start, prod_head, obj_table, n, obj_type)  \
+	do                                                                  \
+	{                                                                   \
+		unsigned int i;                                                 \
+		const uint32_t size = (r)->size;                                \
+		uint32_t idx = prod_head & (r)->mask;                           \
+		obj_type *ring = (obj_type *)ring_start;                        \
+		if (likely(idx + n < size))                                     \
+		{                                                               \
+			for (i = 0; i < (n & ((~(unsigned)0x3))); i += 4, idx += 4) \
+			{                                                           \
+				ring[idx] = obj_table[i];                               \
+				ring[idx + 1] = obj_table[i + 1];                       \
+				ring[idx + 2] = obj_table[i + 2];                       \
+				ring[idx + 3] = obj_table[i + 3];                       \
+			}                                                           \
+			switch (n & 0x3)                                            \
+			{                                                           \
+			case 3:                                                     \
+				ring[idx++] = obj_table[i++]; /* fallthrough */         \
+			case 2:                                                     \
+				ring[idx++] = obj_table[i++]; /* fallthrough */         \
+			case 1:                                                     \
+				ring[idx++] = obj_table[i++];                           \
+			}                                                           \
+		}                                                               \
+		else                                                            \
+		{                                                               \
+			for (i = 0; idx < size; i++, idx++)                         \
+				ring[idx] = obj_table[i];                               \
+			for (idx = 0; i < n; i++, idx++)                            \
+				ring[idx] = obj_table[i];                               \
+		}                                                               \
+	} while (0)
 
-	rc = rte_ring_mp_enqueue_bulk(r, (void * const *)obj_table, n, NULL);
-	if (rc == n)
-		return 0;
-	else
-		return -ENOSPC;
-}
+/* the actual copy of pointers on the ring to obj_table.
+ * Placed here since identical code needed in both
+ * single and multi consumer dequeue functions */
+#define DEQUEUE_PTRS(r, ring_start, cons_head, obj_table, n, obj_type) \
+	do                                                                 \
+	{                                                                  \
+		unsigned int i;                                                \
+		uint32_t idx = cons_head & (r)->mask;                          \
+		const uint32_t size = (r)->size;                               \
+		obj_type *ring = (obj_type *)ring_start;                       \
+		if (likely(idx + n < size))                                    \
+		{                                                              \
+			for (i = 0; i < (n & (~(unsigned)0x3)); i += 4, idx += 4)  \
+			{                                                          \
+				obj_table[i] = ring[idx];                              \
+				obj_table[i + 1] = ring[idx + 1];                      \
+				obj_table[i + 2] = ring[idx + 2];                      \
+				obj_table[i + 3] = ring[idx + 3];                      \
+			}                                                          \
+			switch (n & 0x3)                                           \
+			{                                                          \
+			case 3:                                                    \
+				obj_table[i++] = ring[idx++]; /* fallthrough */        \
+			case 2:                                                    \
+				obj_table[i++] = ring[idx++]; /* fallthrough */        \
+			case 1:                                                    \
+				obj_table[i++] = ring[idx++];                          \
+			}                                                          \
+		}                                                              \
+		else                                                           \
+		{                                                              \
+			for (i = 0; idx < size; i++, idx++)                        \
+				obj_table[i] = ring[idx];                              \
+			for (idx = 0; i < n; i++, idx++)                           \
+				obj_table[i] = ring[idx];                              \
+		}                                                              \
+	} while (0)
+	static inline uint32_t
+	_rte_ring_mp_enqueue_bulk(struct rte_ring *r, void *const *obj_table,
+							  uint32_t n)
+	{
+		uint32_t rc;
 
-static inline uint32_t
-_rte_ring_mp_enqueue_burst(struct rte_ring *r, void * const *obj_table,
-	uint32_t n)
-{
-	return rte_ring_mp_enqueue_burst(r, (void * const *)obj_table, n, NULL);
-}
+		rc = rte_ring_mp_enqueue_bulk(r, (void *const *)obj_table, n, NULL);
+		if (rc == n)
+			return 0;
+		else
+			return -ENOSPC;
+	}
 
-static inline uint32_t
-_rte_ring_mc_dequeue_burst(struct rte_ring *r, void **obj_table, uint32_t n)
-{
-	return rte_ring_mc_dequeue_burst(r, (void **)obj_table, n, NULL);
-}
+	static inline uint32_t
+	_rte_ring_mp_enqueue_burst(struct rte_ring *r, void *const *obj_table,
+							   uint32_t n)
+	{
+		return rte_ring_mp_enqueue_burst(r, (void *const *)obj_table, n, NULL);
+	}
 
-static inline uint32_t
-_rte_ring_enqueue_burst(struct rte_ring *r, void * const *obj_table, uint32_t n)
-{
-	return rte_ring_enqueue_burst(r, (void * const *)obj_table, n, NULL);
-}
+	static inline uint32_t
+	_rte_ring_mc_dequeue_burst(struct rte_ring *r, void **obj_table, uint32_t n)
+	{
+		return rte_ring_mc_dequeue_burst(r, (void **)obj_table, n, NULL);
+	}
 
-static inline uint32_t
-_rte_ring_enqueue_bulk(struct rte_ring *r, void * const *obj_table, uint32_t n)
-{
-	uint32_t rc;
+	static inline uint32_t
+	_rte_ring_enqueue_burst(struct rte_ring *r, void *const *obj_table, uint32_t n)
+	{
+		return rte_ring_enqueue_burst(r, (void *const *)obj_table, n, NULL);
+	}
 
-	rc = rte_ring_enqueue_bulk(r, (void * const *)obj_table, n, NULL);
-	if (rc == n)
-		return 0;
-	else
-		return -ENOSPC;
-}
+	static inline uint32_t
+	_rte_ring_enqueue_bulk(struct rte_ring *r, void *const *obj_table, uint32_t n)
+	{
+		uint32_t rc;
 
-static inline uint32_t
-_rte_ring_dequeue_burst(struct rte_ring *r, void **obj_table, uint32_t n)
-{
-	return rte_ring_dequeue_burst(r, (void **)obj_table, n, NULL);
-}
+		rc = rte_ring_enqueue_bulk(r, (void *const *)obj_table, n, NULL);
+		if (rc == n)
+			return 0;
+		else
+			return -ENOSPC;
+	}
 
-static inline uint32_t
-_rte_ring_get_size(struct rte_ring *r)
-{
-	return r->size;
-}
+	static inline uint32_t
+	_rte_ring_dequeue_burst(struct rte_ring *r, void **obj_table, uint32_t n)
+	{
+		return rte_ring_dequeue_burst(r, (void **)obj_table, n, NULL);
+	}
 
-static inline uint32_t
-_rte_ring_get_mask(struct rte_ring *r)
-{
-	return r->mask;
-}
+	static inline uint32_t
+	_rte_ring_get_size(struct rte_ring *r)
+	{
+		return r->size;
+	}
 
-static inline void **
-_rte_ring_get_data(struct rte_ring *r)
-{
-	return (void **)(&r[1]);
-}
+	static inline uint32_t
+	_rte_ring_get_mask(struct rte_ring *r)
+	{
+		return r->mask;
+	}
 
-static inline void
-_rte_ring_dequeue_ptrs(struct rte_ring *r, void **obj_table, uint32_t num)
-{
-	uint32_t tail;
-	void **data;
+	static inline void **
+	_rte_ring_get_data(struct rte_ring *r)
+	{
+		return (void **)(&r[1]);
+	}
 
-	tail = r->cons.tail;
-	data = _rte_ring_get_data(r);
-	DEQUEUE_PTRS(r, data, tail, obj_table, num, void *);
-}
+	static inline void
+	_rte_ring_dequeue_ptrs(struct rte_ring *r, void **obj_table, uint32_t num)
+	{
+		uint32_t tail;
+		void **data;
+
+		tail = r->cons.tail;
+		data = _rte_ring_get_data(r);
+		DEQUEUE_PTRS(r, data, tail, obj_table, num, void *);
+	}
 
 #else
 

@@ -242,18 +242,18 @@ tle_add_dev(struct tle_ctx *ctx, const struct tle_dev_param *dev_prm)
 		RING_F_SP_ENQ | RING_F_SC_DEQ;
 	tle_dring_reset(&dev->tx.dr, df);
 
-	if ((dev_prm->tx_offload & DEV_TX_OFFLOAD_UDP_CKSUM) != 0 &&
+	if ((dev_prm->tx_offload & RTE_ETH_TX_OFFLOAD_UDP_CKSUM) != 0 &&
 			ctx->prm.proto == TLE_PROTO_UDP) {
-		dev->tx.ol_flags[TLE_V4] |= PKT_TX_IPV4 | PKT_TX_UDP_CKSUM;
-		dev->tx.ol_flags[TLE_V6] |= PKT_TX_IPV6 | PKT_TX_UDP_CKSUM;
-	} else if ((dev_prm->tx_offload & DEV_TX_OFFLOAD_TCP_CKSUM) != 0 &&
+		dev->tx.ol_flags[TLE_V4] |= RTE_MBUF_F_TX_IPV4 | RTE_MBUF_F_TX_UDP_CKSUM;
+		dev->tx.ol_flags[TLE_V6] |= RTE_MBUF_F_TX_IPV6 | RTE_MBUF_F_TX_UDP_CKSUM;
+	} else if ((dev_prm->tx_offload & RTE_ETH_TX_OFFLOAD_TCP_CKSUM) != 0 &&
 			ctx->prm.proto == TLE_PROTO_TCP) {
-		dev->tx.ol_flags[TLE_V4] |= PKT_TX_IPV4 | PKT_TX_TCP_CKSUM;
-		dev->tx.ol_flags[TLE_V6] |= PKT_TX_IPV6 | PKT_TX_TCP_CKSUM;
+		dev->tx.ol_flags[TLE_V4] |= RTE_MBUF_F_TX_IPV4 | RTE_MBUF_F_TX_TCP_CKSUM;
+		dev->tx.ol_flags[TLE_V6] |= RTE_MBUF_F_TX_IPV6 | RTE_MBUF_F_TX_TCP_CKSUM;
 	}
 
-	if ((dev_prm->tx_offload & DEV_TX_OFFLOAD_IPV4_CKSUM) != 0)
-		dev->tx.ol_flags[TLE_V4] |= PKT_TX_IPV4 | PKT_TX_IP_CKSUM;
+	if ((dev_prm->tx_offload & RTE_ETH_TX_OFFLOAD_IPV4_CKSUM) != 0)
+		dev->tx.ol_flags[TLE_V4] |= RTE_MBUF_F_TX_IPV4 | RTE_MBUF_F_TX_IP_CKSUM;
 
 	dev->prm = *dev_prm;
 	dev->ctx = ctx;

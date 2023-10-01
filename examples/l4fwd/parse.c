@@ -19,6 +19,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <ctype.h>
 
 #include "netbe.h"
 #include "parse.h"
@@ -116,6 +117,8 @@ static const struct option long_opt[] = {
 	{NULL, 0, 0, 0}
 };
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Warray-bounds"
 static int
 parse_uint_val(__rte_unused const char *key, const char *val, void *prm)
 {
@@ -132,7 +135,7 @@ parse_uint_val(__rte_unused const char *key, const char *val, void *prm)
 	rv->u64 = v;
 	return 0;
 }
-
+#pragma GCC diagnostic pop
 static int
 parse_ipv4_val(__rte_unused const char *key, const char *val, void *prm)
 {

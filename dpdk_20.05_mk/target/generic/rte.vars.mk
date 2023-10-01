@@ -16,7 +16,7 @@
 #   - define TOOLCHAIN_ASFLAGS variable (overridden by cmdline value)
 #   - may override any previously defined variable
 #
-include $(RTE_SDK)/mk/toolchain/$(RTE_TOOLCHAIN)/rte.vars.mk
+include $(RTE_SDK)/dpdk_20.05_mk/toolchain/$(RTE_TOOLCHAIN)/rte.vars.mk
 
 #
 # machine:
@@ -54,7 +54,7 @@ endif
 #     define in machine .mk)
 #   - may override any previously defined variable
 #
-include $(RTE_SDK)/mk/arch/$(RTE_ARCH)/rte.vars.mk
+include $(RTE_SDK)/dpdk_20.05_mk/arch/$(RTE_ARCH)/rte.vars.mk
 
 #
 # exec-env:
@@ -64,7 +64,7 @@ include $(RTE_SDK)/mk/arch/$(RTE_ARCH)/rte.vars.mk
 #   - define EXECENV_ASFLAGS variable (overridden by cmdline)
 #   - may override any previously defined variable
 #
-include $(RTE_SDK)/mk/exec-env/$(RTE_EXEC_ENV)/rte.vars.mk
+include $(RTE_SDK)/dpdk_20.05_mk/exec-env/$(RTE_EXEC_ENV)/rte.vars.mk
 
 # Don't set CFLAGS/LDFLAGS flags for kernel module, all flags are
 # provided by Kbuild framework.
@@ -72,7 +72,7 @@ ifeq ($(KERNELRELEASE),)
 
 # now that the environment is mostly set up, including the machine type we will
 # be passing to the compiler, set up the specific CPU flags based on that info.
-include $(RTE_SDK)/mk/rte.cpuflags.mk
+include $(RTE_SDK)/dpdk_20.05_mk/rte.cpuflags.mk
 
 # merge all CFLAGS
 CFLAGS := $(CPU_CFLAGS) $(EXECENV_CFLAGS) $(TOOLCHAIN_CFLAGS) $(MACHINE_CFLAGS)

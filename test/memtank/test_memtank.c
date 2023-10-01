@@ -703,7 +703,7 @@ test_memtank_cleanup(struct tle_memtank *mt, struct memstat *ms,
 
 	printf("%s(%s)\n", __func__, tname);
 
-	RTE_LCORE_FOREACH_SLAVE(lc)
+	RTE_LCORE_FOREACH_WORKER(lc)
 		rte_eal_remote_launch(test_worker_cleanup, &arg[lc], lc);
 
 	/* launch on master */
@@ -712,7 +712,7 @@ test_memtank_cleanup(struct tle_memtank *mt, struct memstat *ms,
 	test_memtank_master(&arg[lc]);
 
 	ms->nb_alloc_obj = 0;
-	RTE_LCORE_FOREACH_SLAVE(lc) {
+	RTE_LCORE_FOREACH_WORKER(lc) {
 		rc |= rte_eal_wait_lcore(lc);
 		ms->nb_alloc_obj += arg[lc].stats.alloc.nb_alloc -
 			arg[lc].stats.free.nb_free;
@@ -764,7 +764,7 @@ test_memtank_mt(const char *tname, uint32_t alloc_flags, uint32_t free_flags)
 	memset(arg, 0, sizeof(arg));
 
 	/* prepare args on all slaves */
-	RTE_LCORE_FOREACH_SLAVE(lc) {
+	RTE_LCORE_FOREACH_WORKER(lc) {
 		arg[lc].mt = mt;
 		rc = fill_worker_args(&arg[lc].worker, alloc_flags,
 			free_flags, lc);
@@ -779,7 +779,7 @@ test_memtank_mt(const char *tname, uint32_t alloc_flags, uint32_t free_flags)
 	}
 
 	/* launch on all slaves */
-	RTE_LCORE_FOREACH_SLAVE(lc)
+	RTE_LCORE_FOREACH_WORKER(lc)
 		rte_eal_remote_launch(test_memtank_worker, &arg[lc], lc);
 
 	/* launch on master */
@@ -794,7 +794,7 @@ test_memtank_mt(const char *tname, uint32_t alloc_flags, uint32_t free_flags)
 	memtank_stat_reset(&wrk_stats);
 
 	rc = 0;
-	RTE_LCORE_FOREACH_SLAVE(lc) {
+	RTE_LCORE_FOREACH_WORKER(lc) {
 		rc |= rte_eal_wait_lcore(lc);
 		memtank_stat_dump(stdout, lc, &arg[lc].stats);
 		memtank_stat_aggr(&wrk_stats, &arg[lc].stats);

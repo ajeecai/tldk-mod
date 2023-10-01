@@ -17,8 +17,15 @@ export TLDK_ROOT
 LOCAL_RTE_SDK=$(TLDK_ROOT)/dpdk/_build/dpdk
 
 ifeq ($(RTE_SDK),)
-	export RTE_SDK=$(LOCAL_RTE_SDK)
+	export RTE_SDK=$(TLDK_ROOT)
 endif
+
+
+
+export RTE_TOOLCHAIN ?= gcc
+export RTE_EXEC_ENV ?= linuxapp
+export RTE_MACHINE ?= native
+export RTE_ARCH ?= x86_64
 
 RTE_TARGET ?= x86_64-native-linuxapp-gcc
 
@@ -32,14 +39,29 @@ MAKEFLAGS += --no-print-directory
 O ?= $(TLDK_ROOT)/${RTE_TARGET}
 BASE_OUTPUT ?= $(abspath $(O))
 
+ifeq ($(RTE_OUTPUT),)
+	export RTE_OUTPUT=$(abspath $(O))
+endif
+
+ifeq ($(DPDK_ROOT),)
+$(error "Please define DPDK_ROOT environment variable")
+endif
+
 .PHONY: all
 all: $(DIRS-y)
 
 .PHONY: clean
 clean: $(DIRS-y)
+	$(Q)rm -f $(TLDK_ROOT)/$(RTE_TARGET)/.config && \
+		rm -rf $(DPDK_ROOT)/buildtools && \
+		rm -f $(TLDK_ROOT)/$(RTE_TARGET)/include/rte_config.h \
+		rm -rf $(TLDK_ROOT)/$(RTE_ARCH)-$(RTE_MACHINE)-$(RTE_EXEC_ENV)-$(RTE_TOOLCHAIN)
 
 .PHONY: $(DIRS-y)
-$(DIRS-y): $(RTE_SDK)/mk/rte.vars.mk
+$(DIRS-y): $(TLDK_ROOT)/$(RTE_TARGET)/.config \
+			$(TLDK_ROOT)/buildtools/relpath.sh \
+			$(TLDK_ROOT)/buildtools/check-symbols.sh \
+			$(TLDK_ROOT)/$(RTE_TARGET)/include/rte_config.h
 	@echo "== $@"
 	$(Q)$(MAKE) -C $(@) \
 		M=$(CURDIR)/$(@)/Makefile \
@@ -48,9 +70,23 @@ $(DIRS-y): $(RTE_SDK)/mk/rte.vars.mk
 		CUR_SUBDIR=$(CUR_SUBDIR)/$(@) \
 		S=$(CURDIR)/$(@) \
 		RTE_TARGET=$(RTE_TARGET) \
+		RTE_TOOLCHAIN=$(RTE_TOOLCHAIN) \
+		RTE_EXEC_ENV=$(RTE_EXEC_ENV) \
+		RTE_MACHINE=$(RTE_MACHINE) \
+		RTE_ARCH=$(RTE_ARCH) \
 		$(filter-out $(DIRS-y),$(MAKECMDGOALS))
 
-$(RTE_SDK)/mk/rte.vars.mk:
-ifeq ($(RTE_SDK),$(LOCAL_RTE_SDK))
-	@make RTE_TARGET=$(RTE_TARGET) config all -C $(TLDK_ROOT)/dpdk/
-endif
+$(TLDK_ROOT)/$(RTE_TARGET)/.config:
+	$(Q)mkdir -p $(TLDK_ROOT)/$(RTE_TARGET)/include
+	$(Q)cp .config $(TLDK_ROOT)/$(RTE_TARGET)/.config
+
+$(TLDK_ROOT)/buildtools/relpath.sh:
+	$(Q)mkdir -p $(TLDK_ROOT)/buildtools
+	$(Q)cp -f $(DPDK_ROOT)/buildtools/relpath.sh $(TLDK_ROOT)/buildtools/relpath.sh
+
+$(TLDK_ROOT)/buildtools/check-symbols.sh:
+	$(Q)mkdir -p $(TLDK_ROOT)/buildtools
+	$(Q)cp -f $(DPDK_ROOT)/buildtools/check-symbols.sh $(TLDK_ROOT)/buildtools
+
+$(TLDK_ROOT)/$(RTE_TARGET)/include/rte_config.h:
+	$(Q)cp -f $(DPDK_ROOT)/config/rte_config.h $(TLDK_ROOT)/$(RTE_TARGET)/include/rte_config.h

@@ -18,7 +18,7 @@ endif
 # Default target, can be overwritten by command line or environment
 RTE_TARGET ?= x86_64-native-linuxapp-gcc
 
-include $(RTE_SDK)/mk/rte.vars.mk
+include $(RTE_SDK)/dpdk_20.05_mk/rte.vars.mk
 
 # library name
 LIB = libtle_l4p.a

@@ -32,5 +32,5 @@ all:
 	$(Q)$(MAKE) -C $(BDIR) -f $(RTE_EXTMK) $@ \
 		S=$(RTE_SRCDIR) O=$(RTE_OUTPUT) SRCDIR=$(RTE_SRCDIR)
 else
-include $(RTE_SDK)/mk/rte.app.mk
+include $(RTE_SDK)/dpdk_20.05_mk/rte.app.mk
 endif

@@ -16,6 +16,9 @@
 #ifndef PORT_H_
 #define PORT_H_
 
+#define RX_CSUM_OFFLOAD (RTE_ETH_RX_OFFLOAD_IPV4_CKSUM | RTE_ETH_RX_OFFLOAD_UDP_CKSUM)
+#define TX_CSUM_OFFLOAD (RTE_ETH_TX_OFFLOAD_IPV4_CKSUM | RTE_ETH_TX_OFFLOAD_UDP_CKSUM)
+
 static void
 prepare_hash_key(struct netbe_port *uprt, uint8_t key_size, uint16_t family)
 {
@@ -65,11 +68,11 @@ update_rss_conf(struct netbe_port *uprt,
 				__func__);
 			return -EINVAL;
 		}
-		port_conf->rxmode.mq_mode = ETH_MQ_RX_RSS;
+		port_conf->rxmode.mq_mode = RTE_ETH_MQ_RX_RSS;
 		if (proto == TLE_PROTO_TCP)
-			port_conf->rx_adv_conf.rss_conf.rss_hf = ETH_RSS_TCP;
+			port_conf->rx_adv_conf.rss_conf.rss_hf = RTE_ETH_RSS_TCP;
 		else
-			port_conf->rx_adv_conf.rss_conf.rss_hf = ETH_RSS_UDP;
+			port_conf->rx_adv_conf.rss_conf.rss_hf = RTE_ETH_RSS_UDP;
 		port_conf->rx_adv_conf.rss_conf.rss_key_len = hash_key_size;
 		port_conf->rx_adv_conf.rss_conf.rss_key = uprt->hash_key;
 	}
@@ -112,10 +115,11 @@ update_rss_reta(struct netbe_port *uprt,
 			"%s: The reta size of port %d is %u\n",
 			__func__, uprt->id, dev_info->reta_size);
 
-		if (dev_info->reta_size > ETH_RSS_RETA_SIZE_512) {
+		if (dev_info->reta_size > RTE_ETH_RSS_RETA_SIZE_512)
+		{
 			RTE_LOG(ERR, USER1,
-				"%s: More than %u entries of Reta not supported\n",
-				__func__, ETH_RSS_RETA_SIZE_512);
+					"%s: More than %u entries of Reta not supported\n",
+					__func__, RTE_ETH_RSS_RETA_SIZE_512);
 			return -EINVAL;
 		}
 
@@ -125,8 +129,8 @@ update_rss_reta(struct netbe_port *uprt,
 			q_index = qidx_from_hash_index(i, align_nb_q) %
 						uprt->nb_lcore;
 
-			idx = i / RTE_RETA_GROUP_SIZE;
-			shift = i % RTE_RETA_GROUP_SIZE;
+			idx = i / RTE_ETH_RETA_GROUP_SIZE;
+			shift = i % RTE_ETH_RETA_GROUP_SIZE;
 			reta_conf[idx].mask |= (1ULL << shift);
 			reta_conf[idx].reta[shift] = q_index;
 			RTE_LOG(NOTICE, USER1,
@@ -182,10 +186,11 @@ port_init(struct netbe_port *uprt, uint32_t proto)
 			__func__, uprt->id);
 		port_conf.rxmode.offloads |= uprt->rx_offload & RX_CSUM_OFFLOAD;
 	}
-	port_conf.rxmode.max_rx_pkt_len = uprt->mtu + RTE_ETHER_CRC_LEN;
-	if (port_conf.rxmode.max_rx_pkt_len > RTE_ETHER_MAX_LEN)
+	port_conf.rxmode.mtu = uprt->mtu + RTE_ETHER_CRC_LEN;
+#if RTE_VER_YEAR < 21 || RTE_VER_YEAR == 21 && RTE_VER_MONTH < 11
+	if (port_conf.rxmode.mtu > RTE_ETHER_MAX_LEN)
 		port_conf.rxmode.offloads |= DEV_RX_OFFLOAD_JUMBO_FRAME;
-
+#endif
 	rc = update_rss_conf(uprt, &dev_info, &port_conf, proto);
 	if (rc != 0)
 		return rc;

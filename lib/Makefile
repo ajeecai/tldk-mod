@@ -19,8 +19,6 @@ ifeq ($(TLDK_ROOT),)
 $(error "Please define TLDK_SDK environment variable")
 endif
 
-include $(RTE_SDK)/mk/rte.vars.mk
-
 DIRS-y += libtle_misc
 DIRS-y += libtle_dring
 DIRS-y += libtle_timer

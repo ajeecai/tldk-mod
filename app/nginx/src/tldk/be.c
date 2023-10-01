@@ -238,7 +238,7 @@ be_check_lcore(uint32_t lid)
 		return -EINVAL;
 	}
 
-	if (rte_get_master_lcore() != lid &&
+	if (rte_get_main_lcore() != lid &&
 		rte_eal_get_lcore_state(lid) == RUNNING) {
 		RTE_LOG(ERR, USER1, "lcore %u already in use\n", lid);
 		return -EINVAL;

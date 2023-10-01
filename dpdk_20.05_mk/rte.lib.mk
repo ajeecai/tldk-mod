@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright(c) 2010-2014 Intel Corporation
 
-include $(RTE_SDK)/mk/internal/rte.compile-pre.mk
-include $(RTE_SDK)/mk/internal/rte.install-pre.mk
-include $(RTE_SDK)/mk/internal/rte.clean-pre.mk
-include $(RTE_SDK)/mk/internal/rte.build-pre.mk
+include $(RTE_SDK)/dpdk_20.05_mk/internal/rte.compile-pre.mk
+include $(RTE_SDK)/dpdk_20.05_mk/internal/rte.install-pre.mk
+include $(RTE_SDK)/dpdk_20.05_mk/internal/rte.clean-pre.mk
+include $(RTE_SDK)/dpdk_20.05_mk/internal/rte.build-pre.mk
 
 EXTLIB_BUILD ?= n
 
@@ -152,10 +152,10 @@ doclean:
 	  $(CMDS-all) .$(LIB).cmd $(INSTALL-FILES-all) *.pmd.c *.pmd.o
 	$(Q)rm -f $(_BUILD_TARGETS) $(_INSTALL_TARGETS) $(_CLEAN_TARGETS)
 
-include $(RTE_SDK)/mk/internal/rte.compile-post.mk
-include $(RTE_SDK)/mk/internal/rte.install-post.mk
-include $(RTE_SDK)/mk/internal/rte.clean-post.mk
-include $(RTE_SDK)/mk/internal/rte.build-post.mk
+include $(RTE_SDK)/dpdk_20.05_mk/internal/rte.compile-post.mk
+include $(RTE_SDK)/dpdk_20.05_mk/internal/rte.install-post.mk
+include $(RTE_SDK)/dpdk_20.05_mk/internal/rte.clean-post.mk
+include $(RTE_SDK)/dpdk_20.05_mk/internal/rte.build-post.mk
 
 .PHONY: FORCE
 FORCE:

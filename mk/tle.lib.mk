@@ -20,17 +20,19 @@ ifeq ($(NOT_FIRST_CALL),)
 NOT_FIRST_CALL = 1
 export NOT_FIRST_CALL
 
-BDIR := $(RTE_OUTPUT)/build/$(CUR_SUBDIR)
+BDIR := $(RTE_OUTPUT)/build$(CUR_SUBDIR)
+MK := $(TLDK_ROOT)$(CUR_SUBDIR)/Makefile
+RTE_SRCDIR := $(TLDK_ROOT)$(CUR_SUBDIR)
 
-all:
+all: $(BDIR)/$(LIB)
 	$(Q)mkdir -p $(BDIR)
 	$(Q)$(MAKE) -C $(BDIR) -f $(RTE_EXTMK) \
 		S=$(RTE_SRCDIR) O=$(RTE_OUTPUT) SRCDIR=$(RTE_SRCDIR)
 
 %::
 	$(Q)mkdir -p $(BDIR)
-	$(Q)$(MAKE) -C $(BDIR) -f $(RTE_EXTMK) $@ \
+	$(Q)$(MAKE) -C $(BDIR) -f $(RTE_EXTMK) $(MK) \
 		S=$(RTE_SRCDIR) O=$(RTE_OUTPUT) SRCDIR=$(RTE_SRCDIR)
 else
-include $(RTE_SDK)/mk/rte.lib.mk
+include $(RTE_SDK)/dpdk_20.05_mk/rte.lib.mk
 endif
