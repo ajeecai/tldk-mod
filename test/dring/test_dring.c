@@ -29,7 +29,11 @@
 #include <rte_eal.h>
 #include <rte_per_lcore.h>
 #include <rte_lcore.h>
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wstringop-overread"
+#pragma GCC diagnostic ignored "-Wstringop-overflow"
 #include <rte_ring.h>
+#pragma GCC diagnostic pop
 #include <tle_dring.h>
 #include <rte_random.h>
 

@@ -37,6 +37,10 @@ CFLAGS += -I$(RTE_OUTPUT)/include
 LDLIBS += -L$(RTE_OUTPUT)/lib
 LDLIBS += -ltle_memtank
 
+ifeq ($(DEBUG),)
 EXTRA_CFLAGS += -O3
+else
+EXTRA_CFLAGS += -O0 -ggdb
+endif
 
 include $(TLDK_ROOT)/mk/tle.app.mk

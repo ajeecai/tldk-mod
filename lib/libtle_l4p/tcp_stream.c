@@ -16,7 +16,10 @@
 #include <string.h>
 #include <rte_malloc.h>
 #include <rte_errno.h>
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wstringop-overread"
 #include <rte_ethdev.h>
+#pragma GCC diagnostic pop
 #include <rte_ip.h>
 #include <rte_tcp.h>
 

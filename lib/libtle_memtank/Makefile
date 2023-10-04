@@ -23,8 +23,13 @@ include $(RTE_SDK)/dpdk_20.05_mk/rte.vars.mk
 # library name
 LIB = libtle_memtank.a
 
+ifeq ($(DEBUG),)
 CFLAGS += -O3
-CFLAGS += $(WERROR_FLAGS) -I$(SRCDIR)
+else
+CFLAGS += -O0 -ggdb
+endif
+
+ CFLAGS += $(WERROR_FLAGS) -I$(SRCDIR)
 
 EXPORT_MAP := tle_memtank_version.map
 

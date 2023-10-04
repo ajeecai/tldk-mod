@@ -23,7 +23,12 @@ include $(RTE_SDK)/dpdk_20.05_mk/rte.vars.mk
 # library name
 LIB = libtle_timer.a
 
+ifeq ($(DEBUG),)
 CFLAGS += -O3
+else
+CFLAGS += -O0 -ggdb
+endif
+
 CFLAGS += $(WERROR_FLAGS) -I$(SRCDIR)
 
 EXPORT_MAP := tle_timer_version.map

@@ -41,7 +41,12 @@ LDLIBS += -ltle_l4p
 LDLIBS += -ltle_memtank
 LDLIBS += -ltle_timer
 
+ifeq ($(DEBUG),)
 EXTRA_CFLAGS += -O3
+else
+EXTRA_CFLAGS += -O0 -ggdb
+endif
+
 CFLAGS_parse.o += -D_GNU_SOURCE
 CFLAGS_main.o += -D_GNU_SOURCE
 
