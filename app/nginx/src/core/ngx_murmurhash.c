@@ -7,7 +7,8 @@
 #include <ngx_config.h>
 #include <ngx_core.h>
 
-
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wimplicit-fallthrough="
 uint32_t
 ngx_murmur_hash2(u_char *data, size_t len)
 {
@@ -48,3 +49,4 @@ ngx_murmur_hash2(u_char *data, size_t len)
 
     return h;
 }
+#pragma GCC diagnostic pop

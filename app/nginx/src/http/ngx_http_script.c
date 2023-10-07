@@ -677,7 +677,8 @@ ngx_http_script_add_code(ngx_array_t *codes, size_t size, void *code)
     return new;
 }
 
-
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wcast-function-type"
 static ngx_int_t
 ngx_http_script_add_copy_code(ngx_http_script_compile_t *sc, ngx_str_t *value,
     ngx_uint_t last)
@@ -1411,7 +1412,7 @@ ngx_http_script_if_code(ngx_http_script_engine_t *e)
 
     e->ip += code->next;
 }
-
+#pragma GCC diagnostic pop
 
 void
 ngx_http_script_equal_code(ngx_http_script_engine_t *e)

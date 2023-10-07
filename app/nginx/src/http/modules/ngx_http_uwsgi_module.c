@@ -1859,7 +1859,8 @@ ngx_http_uwsgi_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child)
     return NGX_CONF_OK;
 }
 
-
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wcast-function-type"
 static ngx_int_t
 ngx_http_uwsgi_init_params(ngx_conf_t *cf, ngx_http_uwsgi_loc_conf_t *conf,
     ngx_http_uwsgi_params_t *params, ngx_keyval_t *default_params)
@@ -2061,7 +2062,7 @@ ngx_http_uwsgi_init_params(ngx_conf_t *cf, ngx_http_uwsgi_loc_conf_t *conf,
 
     return ngx_hash_init(&hash, headers_names.elts, headers_names.nelts);
 }
-
+#pragma GCC diagnostic pop
 
 static char *
 ngx_http_uwsgi_pass(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)

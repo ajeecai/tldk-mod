@@ -305,7 +305,8 @@ ngx_init_signals(ngx_log_t *log)
     return NGX_OK;
 }
 
-
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wimplicit-fallthrough="
 static void
 ngx_signal_handler(int signo)
 {
@@ -447,7 +448,7 @@ ngx_signal_handler(int signo)
 
     ngx_set_errno(err);
 }
-
+#pragma GCC diagnostic pop
 
 static void
 ngx_process_get_status(void)

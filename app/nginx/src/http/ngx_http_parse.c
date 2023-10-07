@@ -1247,7 +1247,8 @@ ngx_http_parse_uri(ngx_http_request_t *r)
     return NGX_OK;
 }
 
-
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wimplicit-fallthrough="
 ngx_int_t
 ngx_http_parse_complex_uri(ngx_http_request_t *r, ngx_uint_t merge_slashes)
 {
@@ -1585,7 +1586,7 @@ args:
 
     return NGX_OK;
 }
-
+#pragma GCC diagnostic pop
 
 ngx_int_t
 ngx_http_parse_status_line(ngx_http_request_t *r, ngx_buf_t *b,

@@ -58,13 +58,13 @@ typedef uint8_t dpdk_port_t;
 
 #define FRAG_MBUF_BUF_SIZE      (RTE_PKTMBUF_HEADROOM + TLE_DST_MAX_HDR)
 
-#define RX_CSUM_OFFLOAD (DEV_RX_OFFLOAD_IPV4_CKSUM | DEV_RX_OFFLOAD_TCP_CKSUM)
+#define RX_CSUM_OFFLOAD (RTE_ETH_RX_OFFLOAD_IPV4_CKSUM | RTE_ETH_RX_OFFLOAD_TCP_CKSUM)
 
 #define TCP_MAX_PROCESS 0x20
 
 static const struct rte_eth_conf port_conf_default = {
 	.rxmode = {
-		.offloads = DEV_RX_OFFLOAD_VLAN_STRIP,
+		.offloads = RTE_ETH_RX_OFFLOAD_VLAN_STRIP,
 	},
 };
 
@@ -204,11 +204,13 @@ port_init(const struct tldk_port_conf *pcf)
 		port_conf.rxmode.offloads |= pcf->rx_offload & RX_CSUM_OFFLOAD;
 	}
 
-	port_conf.rxmode.max_rx_pkt_len = pcf->mtu + RTE_ETHER_CRC_LEN;
-	if (port_conf.rxmode.max_rx_pkt_len > RTE_ETHER_MAX_LEN)
-		port_conf.rxmode.offloads |= DEV_RX_OFFLOAD_JUMBO_FRAME;
-	port_conf.rxmode.mq_mode = ETH_MQ_RX_RSS;
-	port_conf.rx_adv_conf.rss_conf.rss_hf = ETH_RSS_IP | ETH_RSS_TCP;
+	port_conf.rxmode.mtu = pcf->mtu + RTE_ETHER_CRC_LEN;
+#if RTE_VER_YEAR < 21 || RTE_VER_YEAR == 21 && RTE_VER_MONTH < 11
+	if (port_conf.rxmode.mtu > RTE_ETHER_MAX_LEN)
+		port_conf.rxmode.offloads |= RTE_ETH_RX_OFFLOAD_JUMBO_FRAME;
+#endif
+	port_conf.rxmode.mq_mode = RTE_ETH_MQ_RX_RSS;
+	port_conf.rx_adv_conf.rss_conf.rss_hf = RTE_ETH_RSS_IP | RTE_ETH_RSS_TCP;
 	port_conf.rx_adv_conf.rss_conf.rss_hf &=
 		dev_info.flow_type_rss_offloads;
 
@@ -434,8 +436,8 @@ fill_dst(struct tle_dest *dst, const struct tldk_dev *td,
 
 	eth = (struct rte_ether_hdr *)dst->hdr;
 
-	rte_ether_addr_copy(&pcf->mac, &eth->s_addr);
-	rte_ether_addr_copy(&dest->mac, &eth->d_addr);
+	rte_ether_addr_copy(&pcf->mac, &eth->src_addr);
+	rte_ether_addr_copy(&dest->mac, &eth->dst_addr);
 	eth->ether_type = rte_cpu_to_be_16(l3_type);
 
 	if (l3_type == RTE_ETHER_TYPE_IPV4) {
