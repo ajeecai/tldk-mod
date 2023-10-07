@@ -53,7 +53,7 @@ all: $(DIRS-y)
 .PHONY: clean
 clean: $(DIRS-y)
 	$(Q)rm -f $(TLDK_ROOT)/$(RTE_TARGET)/.config && \
-		rm -rf $(DPDK_ROOT)/buildtools && \
+		rm -rf $(TLDK_ROOT)/buildtools && \
 		rm -f $(TLDK_ROOT)/$(RTE_TARGET)/include/rte_config.h \
 		rm -rf $(TLDK_ROOT)/$(RTE_ARCH)-$(RTE_MACHINE)-$(RTE_EXEC_ENV)-$(RTE_TOOLCHAIN)
 
