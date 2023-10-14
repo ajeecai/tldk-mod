@@ -33,6 +33,10 @@ DIRS-y += lib
 DIRS-y += examples
 DIRS-y += test
 
+ifneq ($(MODULE),)
+	DIRS-y = $(MODULE)
+endif
+
 MAKEFLAGS += --no-print-directory
 
 # output directory
@@ -53,14 +57,11 @@ all: $(DIRS-y)
 .PHONY: clean
 clean: $(DIRS-y)
 	$(Q)rm -f $(TLDK_ROOT)/$(RTE_TARGET)/.config && \
-		rm -rf $(TLDK_ROOT)/buildtools && \
 		rm -f $(TLDK_ROOT)/$(RTE_TARGET)/include/rte_config.h \
 		rm -rf $(TLDK_ROOT)/$(RTE_ARCH)-$(RTE_MACHINE)-$(RTE_EXEC_ENV)-$(RTE_TOOLCHAIN)
 
 .PHONY: $(DIRS-y)
 $(DIRS-y): $(TLDK_ROOT)/$(RTE_TARGET)/.config \
-			$(TLDK_ROOT)/buildtools/relpath.sh \
-			$(TLDK_ROOT)/buildtools/check-symbols.sh \
 			$(TLDK_ROOT)/$(RTE_TARGET)/include/rte_config.h
 	@echo "== $@"
 	$(Q)$(MAKE) -C $(@) \
@@ -79,14 +80,6 @@ $(DIRS-y): $(TLDK_ROOT)/$(RTE_TARGET)/.config \
 $(TLDK_ROOT)/$(RTE_TARGET)/.config:
 	$(Q)mkdir -p $(TLDK_ROOT)/$(RTE_TARGET)/include
 	$(Q)cp .config $(TLDK_ROOT)/$(RTE_TARGET)/.config
-
-$(TLDK_ROOT)/buildtools/relpath.sh:
-	$(Q)mkdir -p $(TLDK_ROOT)/buildtools
-	$(Q)cp -f $(DPDK_ROOT)/buildtools/relpath.sh $(TLDK_ROOT)/buildtools/relpath.sh
-
-$(TLDK_ROOT)/buildtools/check-symbols.sh:
-	$(Q)mkdir -p $(TLDK_ROOT)/buildtools
-	$(Q)cp -f $(DPDK_ROOT)/buildtools/check-symbols.sh $(TLDK_ROOT)/buildtools
 
 $(TLDK_ROOT)/$(RTE_TARGET)/include/rte_config.h:
 	$(Q)cp -f $(DPDK_ROOT)/config/rte_config.h $(TLDK_ROOT)/$(RTE_TARGET)/include/rte_config.h

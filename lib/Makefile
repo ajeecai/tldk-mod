@@ -25,4 +25,8 @@ DIRS-y += libtle_timer
 DIRS-y += libtle_memtank
 DIRS-y += libtle_l4p
 
+ifneq ($(MODULE),)
+	DIRS-y = libtle_$(MODULE)
+endif
+
 include $(TLDK_ROOT)/mk/tle.subdir.mk
