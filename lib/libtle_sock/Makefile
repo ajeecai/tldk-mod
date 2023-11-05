@@ -11,23 +11,33 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-ifeq ($(RTE_SDK),)
-$(error "Please define RTE_SDK environment variable")
-endif
-
 ifeq ($(TLDK_ROOT),)
-$(error "Please define TLDK_SDK environment variable")
+$(error "Please define TLDK_ROOT environment variable")
 endif
 
-DIRS-y += libtle_misc
-DIRS-y += libtle_dring
-DIRS-y += libtle_timer
-DIRS-y += libtle_memtank
-DIRS-y += libtle_l4p
-DIRS-y += libtle_sock
+# Default target, can be overwritten by command line or environment
+RTE_TARGET ?= x86_64-native-linuxapp-gcc
 
-ifneq ($(MODULE),)
-	DIRS-y = libtle_$(MODULE)
+include $(TLDK_ROOT)/dpdk_20.05_mk/rte.vars.mk
+
+# library name
+LIB = libtle_sock.a
+
+ifeq ($(DEBUG),)
+CFLAGS += -O3
+else
+CFLAGS += -O0 -ggdb
 endif
 
-include $(TLDK_ROOT)/mk/tle.subdir.mk
+ CFLAGS += $(WERROR_FLAGS) -I$(SRCDIR)
+
+EXPORT_MAP := tle_sock_version.map
+
+LIBABIVER := 1
+
+#source files
+SRCS-y += tle_sock.c
+
+SYMLINK-y-include += tle_sock.h
+
+include $(TLDK_ROOT)/mk/tle.lib.mk

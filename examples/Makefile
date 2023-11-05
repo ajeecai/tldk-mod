@@ -22,5 +22,6 @@ endif
 include $(RTE_SDK)/dpdk_20.05_mk/rte.vars.mk
 
 DIRS-y += l4fwd
+DIRS-y += l4fwd_sock
 
 include $(TLDK_ROOT)/mk/tle.subdir.mk

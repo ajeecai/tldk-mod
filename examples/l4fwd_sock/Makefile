@@ -15,19 +15,41 @@ ifeq ($(RTE_SDK),)
 $(error "Please define RTE_SDK environment variable")
 endif
 
+ifeq ($(RTE_TARGET),)
+$(error "Please define RTE_TARGET environment variable")
+endif
+
 ifeq ($(TLDK_ROOT),)
-$(error "Please define TLDK_SDK environment variable")
+$(error "Please define TLDK_ROOT environment variable")
 endif
 
-DIRS-y += libtle_misc
-DIRS-y += libtle_dring
-DIRS-y += libtle_timer
-DIRS-y += libtle_memtank
-DIRS-y += libtle_l4p
-DIRS-y += libtle_sock
+include $(RTE_SDK)/dpdk_20.05_mk/rte.vars.mk
 
-ifneq ($(MODULE),)
-	DIRS-y = libtle_$(MODULE)
+# binary name
+APP = l4fwd_sock
+
+# all source are stored in SRCS-y
+SRCS-y += parse.c
+SRCS-y += pkt.c
+SRCS-y += main.c
+
+CFLAGS += $(WERROR_FLAGS)
+CFLAGS += -I$(RTE_OUTPUT)/include
+
+LDLIBS += -L$(RTE_OUTPUT)/lib
+LDLIBS += -ltle_sock
+LDLIBS += -ltle_l4p
+LDLIBS += -ltle_memtank
+LDLIBS += -ltle_timer
+
+
+ifeq ($(DEBUG),)
+EXTRA_CFLAGS += -O3
+else
+EXTRA_CFLAGS += -O0 -ggdb
 endif
 
-include $(TLDK_ROOT)/mk/tle.subdir.mk
+CFLAGS_parse.o += -D_GNU_SOURCE
+CFLAGS_main.o += -D_GNU_SOURCE
+
+include $(TLDK_ROOT)/mk/tle.app.mk

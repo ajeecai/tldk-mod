@@ -1,9 +1,11 @@
 dpdk/_build/
 dpdk/dpdk-*.tar.gz
-buildtools
 x86_64-native-linuxapp-gcc/
 .vagrant
 .project
 .idea
 .cproject
 .pydev*
+*.o
+app/nginx/objs
+dump.bin
