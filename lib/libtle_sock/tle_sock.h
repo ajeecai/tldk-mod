@@ -31,12 +31,20 @@
 #include <stddef.h>
 #include <inttypes.h>
 
+#include <tle_ip.h>
 #include <tle_tcp.h>
 
-int sock_global_init(int argc, char *argv[]);
-int sock_local_init(void);
-void tle_engine(void);
+struct tle_dev;
 
+/*** init_func_hook must be in first place ***/
+void init_func_hook(void);
+
+struct rte_mempool *tle_init_pkt_pool(int pkt_num);
+struct tle_dev *tle_init_dev(struct tle_dev_param *prm);
+void tle_init_streams(void);
+
+void tle_engine(void);
+void tle_input(struct rte_mbuf *pkt[], int num);
 int socket(int domain, int type, int protocol);
 int bind(int sd, const struct sockaddr *addr, socklen_t addrlen);
 int listen(int sd, int backlog);

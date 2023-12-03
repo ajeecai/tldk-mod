@@ -16,6 +16,8 @@
 #ifndef _STREAM_H_
 #define _STREAM_H_
 
+#include <rte_ether.h>
+
 #include "ctx.h"
 
 #ifdef __cplusplus
@@ -47,6 +49,7 @@ struct tle_stream {
 			union ipv6_addrs mask;
 		} ipv6;
 	};
+	struct tle_dest dest;
 };
 
 static inline uint32_t
@@ -123,26 +126,41 @@ static inline int32_t
 stream_get_dest(struct tle_stream *s, const void *dst_addr,
 	struct tle_dest *dst)
 {
-	int32_t rc;
+	int32_t rc = 0;
 	const struct in_addr *d4;
 	const struct in6_addr *d6;
 	struct tle_ctx *ctx;
 	struct tle_dev *dev;
+	struct rte_ether_hdr *l2h = NULL;
 
 	ctx = s->ctx;
 
-	/* it is here just to keep gcc happy. */
-	d4 = NULL;
-	d6 = NULL;
+	d4 = dst_addr;
+	d6 = dst_addr;
+	if (s->dest.dev)
+	{
+		*dst = s->dest;
+	}
+	else
+	{
+		if (s->type == TLE_V4)
+		{
+			rc = ctx->prm.lookup4(ctx->prm.lookup4_data, d4, dst);
+		}
+		else if (s->type == TLE_V6)
+		{
+			rc = ctx->prm.lookup6(ctx->prm.lookup6_data, d6, dst);
+		}
+		else
+		{
+			rc = -ENOENT;
+		}
 
-	if (s->type == TLE_V4) {
-		d4 = dst_addr;
-		rc = ctx->prm.lookup4(ctx->prm.lookup4_data, d4, dst);
-	} else if (s->type == TLE_V6) {
-		d6 = dst_addr;
-		rc = ctx->prm.lookup6(ctx->prm.lookup6_data, d6, dst);
-	} else
-		rc = -ENOENT;
+		if (rc == 0)
+		{
+			s->dest = *dst;
+		}
+	}
 
 	if (rc < 0 || dst->dev == NULL || dst->dev->ctx != ctx)
 		return -ENOENT;
@@ -162,6 +180,10 @@ stream_get_dest(struct tle_stream *s, const void *dst_addr,
 			sizeof(l3h->src_addr));
 		rte_memcpy(l3h->dst_addr, d6, sizeof(l3h->dst_addr));
 	}
+
+	l2h = (struct rte_ether_hdr *)dst->hdr;
+	// dst mac is in next_hop_mac of routing entry
+	rte_ether_addr_copy((const struct rte_ether_addr *)dev->prm.mac, &l2h->src_addr);
 
 	return dev - ctx->dev;
 }

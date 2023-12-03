@@ -82,36 +82,4 @@ fwd_tbl_lkp(struct netfe_lcore *fe, uint16_t family, const struct sockaddr *sa)
 	return d;
 }
 
-static int
-fwd_tbl_init(struct netfe_lcore *fe, uint16_t family, uint32_t lcore)
-{
-	int32_t rc;
-	struct rte_hash **h;
-	struct rte_hash_parameters hprm;
-	char buf[RTE_HASH_NAMESIZE];
-
-	if (family == AF_INET) {
-		snprintf(buf, sizeof(buf), "fwd4tbl@%u", lcore);
-		h = &fe->fw4h;
-		hprm.key_len = sizeof(struct fwd4_key);
-	} else {
-		snprintf(buf, sizeof(buf), "fwd6tbl@%u", lcore);
-		h = &fe->fw6h;
-		hprm.key_len = sizeof(struct fwd6_key);
-	}
-
-	hprm.name = buf;
-	hprm.entries = RTE_MAX(2 * fe->snum, 0x10U);
-	hprm.socket_id = rte_lcore_to_socket_id(lcore);
-	hprm.hash_func = NULL;
-	hprm.hash_func_init_val = 0;
-
-	*h = rte_hash_create(&hprm);
-	if (*h == NULL)
-		rc = (rte_errno != 0) ? -rte_errno : -ENOMEM;
-	else
-		rc = 0;
-	return rc;
-}
-
 #endif /* __FWDTBL_H__ */

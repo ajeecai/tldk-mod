@@ -18,11 +18,13 @@
 
 #include <rte_arp.h>
 
+RTE_DECLARE_PER_LCORE(struct tldk_ctx *, tldk_ctx);
+
 static void
 sig_handle(int signum)
 {
 	RTE_LOG(ERR, USER1, "%s(%d)\n", __func__, signum);
-	force_quit = 1;
+	// force_quit = 1;
 }
 
 static void
@@ -122,12 +124,12 @@ netfe_get_stream(struct netfe_stream_list *list)
 }
 
 static inline void
-netfe_put_streams(struct netfe_lcore *fe, struct netfe_stream_list *list,
-	struct netfe_stream *fs[], uint32_t num)
+netfe_put_streams(struct netfe_stream_list *list,
+				  struct netfe_stream *fs[], uint32_t num)
 {
 	uint32_t i, n;
 
-	n = RTE_MIN(fe->snum - list->num, num);
+	n = RTE_MIN(TLE_MAX_STREAMS - list->num, num);
 	if (n != num)
 		RTE_LOG(ERR, USER1, "%s: list overflow by %u\n", __func__,
 			num - n);
@@ -138,15 +140,16 @@ netfe_put_streams(struct netfe_lcore *fe, struct netfe_stream_list *list,
 }
 
 static inline void
-netfe_put_stream(struct netfe_lcore *fe, struct netfe_stream_list *list,
-	struct netfe_stream *s)
+netfe_put_stream(struct netfe_stream_list *list,
+				 struct netfe_stream *s)
 {
-	if (list->num == fe->snum) {
+	if (list->num == TLE_MAX_STREAMS)
+	{
 		RTE_LOG(ERR, USER1, "%s: list is full\n", __func__);
 		return;
 	}
 
-	netfe_put_streams(fe, list, &s, 1);
+	netfe_put_streams(list, &s, 1);
 }
 
 static inline void
@@ -157,14 +160,17 @@ netfe_rem_stream(struct netfe_stream_list *list, struct netfe_stream *s)
 }
 
 static void
-netfe_stream_close(struct netfe_lcore *fe, struct netfe_stream *fes)
+netfe_stream_close(struct netfe_stream *fes)
 {
-	tle_stream_close(fes->s);
+	struct tldk_ctx *tldk_ctx = RTE_PER_LCORE(tldk_ctx);
+	struct netfe_stream_list *free = &tldk_ctx->free;
+
+	tle_tcp_stream_close(fes->s);
 	tle_event_free(fes->txev);
 	tle_event_free(fes->rxev);
 	tle_event_free(fes->erev);
 	memset(fes, 0, sizeof(*fes));
-	netfe_put_stream(fe, &fe->free, fes);
+	netfe_put_stream(free, fes);
 }
 
 /*
@@ -253,50 +259,6 @@ netbe_lcore_setup(struct netbe_lcore *lc)
 	if (rc == 0)
 		RTE_PER_LCORE(_be) = lc;
 	return rc;
-}
-
-static void
-netbe_lcore_clear(void)
-{
-	uint32_t i, j;
-	struct netbe_lcore *lc;
-
-	lc = RTE_PER_LCORE(_be);
-	if (lc == NULL)
-		return;
-
-	RTE_LOG(NOTICE, USER1, "%s(lcore=%u, proto=%s, ctx: %p) finish\n",
-		__func__, lc->id, proto_name[lc->proto], lc->ctx);
-	for (i = 0; i != lc->prtq_num; i++) {
-		RTE_LOG(NOTICE, USER1, "%s:%u(port=%u, q=%u, lcore=%u, dev=%p) "
-			"rx_stats={"
-			"in=%" PRIu64 ",up=%" PRIu64 ",drop=%" PRIu64 "}, "
-			"tx_stats={"
-			"in=%" PRIu64 ",up=%" PRIu64 ",drop=%" PRIu64 "};\n",
-			__func__, i, lc->prtq[i].port.id, lc->prtq[i].rxqid,
-			lc->id,
-			lc->prtq[i].dev,
-			lc->prtq[i].rx_stat.in,
-			lc->prtq[i].rx_stat.up,
-			lc->prtq[i].rx_stat.drop,
-			lc->prtq[i].tx_stat.down,
-			lc->prtq[i].tx_stat.out,
-			lc->prtq[i].tx_stat.drop);
-	}
-
-	RTE_LOG(NOTICE, USER1, "tcp_stat={\n");
-	for (i = 0; i != RTE_DIM(lc->tcp_stat.flags); i++) {
-		if (lc->tcp_stat.flags[i] != 0)
-			RTE_LOG(NOTICE, USER1, "[flag=%#x]==%" PRIu64 ";\n",
-				i, lc->tcp_stat.flags[i]);
-	}
-	RTE_LOG(NOTICE, USER1, "};\n");
-
-	for (i = 0; i != lc->prtq_num; i++)
-		for (j = 0; j != lc->prtq[i].tx_buf.num; j++)
-			rte_pktmbuf_free(lc->prtq[i].tx_buf.pkt[j]);
-
-	RTE_PER_LCORE(_be) = NULL;
 }
 
 static int
@@ -537,7 +499,7 @@ netbe_rx(struct netbe_lcore *lc, uint32_t pidx)
 			__func__, lc->id, lc->prtq[pidx].port.id,
 			lc->prtq[pidx].rxqid, n);
 
-		k = tle_rx_bulk(lc->prtq[pidx].dev, pkt, rp, rc, n);
+		k = tle_tcp_rx_bulk(lc->prtq[pidx].dev, pkt, rp, rc, n);
 
 		lc->prtq[pidx].rx_stat.up += k;
 		lc->prtq[pidx].rx_stat.drop += n - k;
@@ -559,64 +521,6 @@ netbe_rx(struct netbe_lcore *lc, uint32_t pidx)
 		return;
 
 	send_arp_reply(&lc->prtq[pidx], abuf);
-}
-
-static inline void
-netbe_tx(struct netbe_lcore *lc, uint32_t pidx)
-{
-	uint32_t j, k, n;
-	struct rte_mbuf **mb;
-
-	n = lc->prtq[pidx].tx_buf.num;
-	k = RTE_DIM(lc->prtq[pidx].tx_buf.pkt) - n;
-	mb = lc->prtq[pidx].tx_buf.pkt;
-
-	if (k >= RTE_DIM(lc->prtq[pidx].tx_buf.pkt) / 2) {
-		j = tle_tx_bulk(lc->prtq[pidx].dev, mb + n, k);
-		n += j;
-		lc->prtq[pidx].tx_stat.down += j;
-	}
-
-	if (n == 0)
-		return;
-
-	NETBE_TRACE("%s(%u): tle_%s_tx_bulk(%p) returns %u,\n"
-		"total pkts to send: %u\n",
-		__func__, lc->id, proto_name[lc->proto],
-		lc->prtq[pidx].dev, j, n);
-
-	for (j = 0; j != n; j++)
-		NETBE_PKT_DUMP(mb[j]);
-
-	k = rte_eth_tx_burst(lc->prtq[pidx].port.id,
-			lc->prtq[pidx].txqid, mb, n);
-
-	lc->prtq[pidx].tx_stat.out += k;
-	lc->prtq[pidx].tx_stat.drop += n - k;
-	NETBE_TRACE("%s(%u): rte_eth_tx_burst(%u, %u, %u) returns %u\n",
-		__func__, lc->id, lc->prtq[pidx].port.id, lc->prtq[pidx].txqid,
-		n, k);
-
-	lc->prtq[pidx].tx_buf.num = n - k;
-	if (k != 0)
-		for (j = k; j != n; j++)
-			mb[j - k] = mb[j];
-}
-
-static inline void
-netbe_lcore(void)
-{
-	uint32_t i;
-	struct netbe_lcore *lc;
-
-	lc = RTE_PER_LCORE(_be);
-	if (lc == NULL)
-		return;
-
-	for (i = 0; i != lc->prtq_num; i++) {
-		netbe_rx(lc, i);
-		netbe_tx(lc, i);
-	}
 }
 
 static inline int
@@ -727,7 +631,7 @@ netfe_rx_process(uint32_t lcore, struct netfe_stream *fes)
 		return 0;
 	}
 
-	n = tle_stream_recv(fes->s, fes->pbuf.pkt + n, k);
+	n = tle_tcp_stream_recv(fes->s, fes->pbuf.pkt + n, k);
 	if (n == 0)
 		return 0;
 

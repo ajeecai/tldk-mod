@@ -28,7 +28,7 @@ extern "C" {
 /*
  * internal defines.
  */
-#define	MAX_PKT_BURST	0x20
+// #define	MAX_PKT_BURST	0x20
 
 #define	MAX_DRB_BURST	4
 

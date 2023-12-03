@@ -54,6 +54,12 @@ extern "C" {
 struct tle_ctx;
 struct tle_dev;
 
+typedef uint16_t (*TLE_RX_BULK_FUNC)(uint16_t port_id, uint16_t queue_id, struct rte_mbuf *pkt[],
+									 const uint16_t num);
+
+typedef uint16_t (*TLE_TX_BULK_FUNC)(uint16_t port_id, uint16_t queue_id, struct rte_mbuf *pkt[],
+									 const uint16_t num);
+
 /**
  * Blocked L4 ports info.
  */
@@ -62,6 +68,8 @@ struct tle_bl_port {
 	const uint16_t *port; /**< list of blocked ports. */
 };
 
+#define MAX_PKT_BURST 0x20
+#define TLE_DST_MAX_HDR 0x60
 
 /**
  * device parameters.
@@ -73,9 +81,15 @@ struct tle_dev_param {
 	struct in6_addr local_addr6; /**< local IPv6 address assigned. */
 	struct tle_bl_port bl4; /**< blocked ports for IPv4 address. */
 	struct tle_bl_port bl6; /**< blocked ports for IPv4 address. */
-};
+	struct rte_mempool *mp;
+	char name[16];
+	char mac[6];
 
-#define TLE_DST_MAX_HDR	0x60
+	uint16_t port_id;
+	uint16_t queue_id;
+	TLE_RX_BULK_FUNC pkt_rx_func;
+	TLE_TX_BULK_FUNC pkt_tx_func;
+};
 
 struct tle_dest {
 	struct rte_mempool *head_mp;
@@ -204,6 +218,10 @@ tle_add_dev(struct tle_ctx *ctx, const struct tle_dev_param *dev_prm);
  *   - -EINVAL - invalid parameter passed to function
  */
 int tle_del_dev(struct tle_dev *dev);
+
+int tle_dev_rx(struct tle_dev *dev);
+
+int tle_dev_tx(struct tle_dev *dev);
 
 /**
  * Flags to the context that destinations info might be changed,

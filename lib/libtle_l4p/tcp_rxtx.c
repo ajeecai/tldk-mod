@@ -60,7 +60,10 @@ rx_obtain_listen_stream(const struct tle_dev *dev, const union pkt_info *pi,
 
 	s = (struct tle_tcp_stream *)dev->dp[type]->streams[pi->port.dst];
 	if (s == NULL || tcp_stream_acquire(s) < 0)
+	{
+		RTE_LOG(ERR, USER1, "%s %d: can't find lisnter on %d\n", __FUNCTION__, __LINE__, ntohs(pi->port.dst));
 		return NULL;
+	}
 
 	/* check that we have a proper stream. */
 	if (s->tcb.state != TCP_ST_LISTEN) {
@@ -836,7 +839,7 @@ stream_fill_dest(struct tle_tcp_stream *s)
 	uint32_t type;
 	const void *da;
 
-        type = s->s.type;
+	type = s->s.type;
 	if (type == TLE_V4)
 		da = &s->s.ipv4.addr.src;
 	else

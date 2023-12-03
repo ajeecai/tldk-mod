@@ -333,13 +333,6 @@ typedef int (*LCORE_MAIN_FUNCTYPE)(void *arg);
  * tle_l4p lib function pointers
  */
 
-typedef uint16_t (*TLE_RX_BULK_FUNCTYPE)
-	(struct tle_dev *dev, struct rte_mbuf *pkt[],
-	struct rte_mbuf *rp[], int32_t rc[], uint16_t num);
-
-typedef uint16_t (*TLE_TX_BULK_FUNCTYPE)
-	(struct tle_dev *dev, struct rte_mbuf *pkt[], uint16_t num);
-
 typedef uint16_t (*TLE_STREAM_RECV_FUNCTYPE)
 	(struct tle_stream *ts, struct rte_mbuf *pkt[], uint16_t num);
 

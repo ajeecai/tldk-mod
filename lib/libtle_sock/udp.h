@@ -40,7 +40,7 @@ netfe_stream_open_udp(struct netfe_lcore *fe, struct netfe_sprm *sprm,
 	fes->txev = tle_event_alloc(fe->txeq, fes);
 
 	if (fes->rxev == NULL || fes->txev == NULL) {
-		netfe_stream_close(fe, fes);
+		netfe_stream_close(fes);
 		rte_errno = ENOMEM;
 		return NULL;
 	}
@@ -65,7 +65,7 @@ netfe_stream_open_udp(struct netfe_lcore *fe, struct netfe_sprm *sprm,
 
 	if (fes->s == NULL) {
 		rc = rte_errno;
-		netfe_stream_close(fe, fes);
+		netfe_stream_close(fes);
 		rte_errno = rc;
 
 		if (sprm->local_addr.ss_family == AF_INET) {
@@ -92,100 +92,6 @@ netfe_stream_open_udp(struct netfe_lcore *fe, struct netfe_sprm *sprm,
 	fes->family = sprm->local_addr.ss_family;
 
 	return fes;
-}
-
-static int
-netfe_lcore_init_udp(const struct netfe_lcore_prm *prm)
-{
-	size_t sz;
-	int32_t rc;
-	uint32_t i, lcore, snum;
-	struct netfe_lcore *fe;
-	struct tle_evq_param eprm;
-	struct netfe_stream *fes;
-	struct netfe_sprm *sprm;
-
-	lcore = rte_lcore_id();
-
-	snum = prm->max_streams;
-	RTE_LOG(NOTICE, USER1, "%s(lcore=%u, nb_streams=%u, max_streams=%u)\n",
-		__func__, lcore, prm->nb_streams, snum);
-
-	memset(&eprm, 0, sizeof(eprm));
-	eprm.socket_id = rte_lcore_to_socket_id(lcore);
-	eprm.max_events = snum;
-
-	sz = sizeof(*fe) + snum * sizeof(struct netfe_stream);
-	fe = rte_zmalloc_socket(NULL, sz, RTE_CACHE_LINE_SIZE,
-		rte_lcore_to_socket_id(lcore));
-
-	if (fe == NULL) {
-		RTE_LOG(ERR, USER1, "%s:%d failed to allocate %zu bytes\n",
-			__func__, __LINE__, sz);
-		return -ENOMEM;
-	}
-
-	RTE_PER_LCORE(_fe) = fe;
-
-	fe->snum = snum;
-	/* initialize the stream pool */
-	LIST_INIT(&fe->free.head);
-	LIST_INIT(&fe->use.head);
-	fes = (struct netfe_stream *)(fe + 1);
-	for (i = 0; i != snum; i++, fes++)
-		netfe_put_stream(fe, &fe->free, fes);
-
-	/* allocate the event queues */
-	fe->rxeq = tle_evq_create(&eprm);
-	fe->txeq = tle_evq_create(&eprm);
-
-	RTE_LOG(INFO, USER1, "%s(%u) rx evq=%p, tx evq=%p\n",
-		__func__, lcore, fe->rxeq, fe->txeq);
-	if (fe->rxeq == NULL || fe->txeq == NULL)
-		return -ENOMEM;
-
-	rc = fwd_tbl_init(fe, AF_INET, lcore);
-	RTE_LOG(ERR, USER1, "%s(%u) fwd_tbl_init(%u) returns %d\n",
-		__func__, lcore, AF_INET, rc);
-	if (rc != 0)
-		return rc;
-
-	rc = fwd_tbl_init(fe, AF_INET6, lcore);
-	RTE_LOG(ERR, USER1, "%s(%u) fwd_tbl_init(%u) returns %d\n",
-		__func__, lcore, AF_INET6, rc);
-	if (rc != 0)
-		return rc;
-
-	/* open all requested streams. */
-	for (i = 0; i != prm->nb_streams; i++) {
-		sprm = &prm->stream[i].sprm;
-		fes = netfe_stream_open_udp(fe, sprm, lcore, prm->stream[i].op,
-			sprm->bidx);
-		if (fes == NULL) {
-			rc = -rte_errno;
-			break;
-		}
-
-		netfe_stream_dump(fes, &sprm->local_addr, &sprm->remote_addr);
-
-		if (prm->stream[i].op == FWD) {
-			fes->fwdprm = prm->stream[i].fprm;
-			rc = fwd_tbl_add(fe,
-				prm->stream[i].fprm.remote_addr.ss_family,
-				(const struct sockaddr *)
-				&prm->stream[i].fprm.remote_addr,
-				fes);
-			if (rc != 0) {
-				netfe_stream_close(fe, fes);
-				break;
-			}
-		} else if (prm->stream[i].op == TXONLY) {
-			fes->txlen = prm->stream[i].txlen;
-			fes->raddr = prm->stream[i].sprm.remote_addr;
-		}
-	}
-
-	return rc;
 }
 
 static struct netfe_stream *
@@ -219,7 +125,7 @@ find_fwd_dst_udp(uint32_t lcore, struct netfe_stream *fes,
 
 	rc = fwd_tbl_add(fe, fes->family, sa, fed);
 	if (rc != 0) {
-		netfe_stream_close(fe, fed);
+		netfe_stream_close(fed);
 		fed = NULL;
 	}
 
@@ -518,71 +424,6 @@ netfe_lcore_udp(void)
 				netfe_tx_process_udp(lcore, fs[j]);
 		}
 	}
-}
-
-static void
-netfe_lcore_fini_udp(void)
-{
-	struct netfe_lcore *fe;
-	uint32_t i;
-	struct tle_udp_stream_param uprm;
-	struct netfe_stream *fes;
-
-	fe = RTE_PER_LCORE(_fe);
-	if (fe == NULL)
-		return;
-
-	for (i = 0; i != fe->use.num; i++) {
-		fes = netfe_get_stream(&fe->use);
-		tle_udp_stream_get_param(fes->s, &uprm);
-		netfe_stream_dump(fes, &uprm.local_addr, &uprm.remote_addr);
-		netfe_stream_close(fe, fes);
-	}
-
-	tle_evq_destroy(fe->txeq);
-	tle_evq_destroy(fe->rxeq);
-	RTE_PER_LCORE(_fe) = NULL;
-	rte_free(fe);
-}
-
-static int
-lcore_main_udp(void *arg)
-{
-	int32_t rc;
-	uint32_t lcore;
-	struct lcore_prm *prm;
-
-	prm = arg;
-	lcore = rte_lcore_id();
-
-	RTE_LOG(NOTICE, USER1, "%s(lcore=%u) start\n",
-		__func__, lcore);
-
-	rc = 0;
-
-	/* lcore FE init. */
-	if (prm->fe.max_streams != 0)
-		rc = netfe_lcore_init_udp(&prm->fe);
-
-	/* lcore FE init. */
-	if (rc == 0 && prm->be.lc != NULL)
-		rc = netbe_lcore_setup(prm->be.lc);
-
-	if (rc != 0)
-		sig_handle(SIGQUIT);
-
-	while (force_quit == 0) {
-		netfe_lcore_udp();
-		netbe_lcore();
-	}
-
-	RTE_LOG(NOTICE, USER1, "%s(lcore=%u) finish\n",
-		__func__, lcore);
-
-	netfe_lcore_fini_udp();
-	netbe_lcore_clear();
-
-	return rc;
 }
 
 #endif /* UDP_H_ */

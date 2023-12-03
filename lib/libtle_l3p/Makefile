@@ -15,20 +15,38 @@ ifeq ($(RTE_SDK),)
 $(error "Please define RTE_SDK environment variable")
 endif
 
-ifeq ($(TLDK_ROOT),)
-$(error "Please define TLDK_SDK environment variable")
+# Default target, can be overwritten by command line or environment
+RTE_TARGET ?= x86_64-native-linuxapp-gcc
+
+include $(RTE_SDK)/dpdk_20.05_mk/rte.vars.mk
+
+# library name
+LIB = libtle_l3p.a
+
+ifeq ($(DEBUG),)
+CFLAGS += -O3
+else
+CFLAGS += -O0 -ggdb
 endif
 
-DIRS-y += libtle_misc
-DIRS-y += libtle_dring
-DIRS-y += libtle_timer
-DIRS-y += libtle_memtank
-DIRS-y += libtle_l4p
-DIRS-y += libtle_l3p
-DIRS-y += libtle_sock
+CFLAGS += $(WERROR_FLAGS) -I$(SRCDIR)
 
-ifneq ($(MODULE),)
-	DIRS-y = libtle_$(MODULE)
-endif
+EXPORT_MAP := tle_l3p_version.map
 
-include $(TLDK_ROOT)/mk/tle.subdir.mk
+LIBABIVER := 1
+
+#source files
+SRCS-y += ipv4_routing.c
+
+
+# install this header file
+SYMLINK-y-include += tle_ip.h
+
+
+# this lib dependencies
+DEPDIRS-y += lib/libtle_misc
+DEPDIRS-y += lib/libtle_memtank
+DEPDIRS-y += lib/libtle_dring
+DEPDIRS-y += lib/libtle_timer
+
+include $(TLDK_ROOT)/mk/tle.lib.mk

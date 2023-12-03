@@ -17,6 +17,7 @@
 #include <dlfcn.h>
 #include "netbe.h"
 #include "parse.h"
+#include "tle_ip.h"
 #include "tle_sock.h"
 
 #define MAX_RULES 0x100
@@ -27,13 +28,15 @@
 
 #define MPOOL_CACHE_SIZE 0x100
 #define MPOOL_NB_BUF 0x20000
+#define TLE_MAX_STREAMS 1000
+#define TLE_MAX_MBUFS 0x100
+#define TLE_MAX_BACKLOG 10
 
 #define FRAG_MBUF_BUF_SIZE (RTE_PKTMBUF_HEADROOM + TLE_DST_MAX_HDR)
 #define FRAG_TTL MS_PER_S
 #define FRAG_TBL_BUCKET_ENTRIES 16
 
 #define FIRST_PORT 0x8000
-#define TLE_MAX_BACKLOG 10
 
 #define RX_CSUM_OFFLOAD (RTE_ETH_RX_OFFLOAD_IPV4_CKSUM | RTE_ETH_RX_OFFLOAD_UDP_CKSUM)
 #define TX_CSUM_OFFLOAD (RTE_ETH_TX_OFFLOAD_IPV4_CKSUM | RTE_ETH_TX_OFFLOAD_UDP_CKSUM)
@@ -48,12 +51,11 @@
 #define CORE_NUM_SHIFT_BITS __builtin_clz(RTE_MAX_LCORE)
 #define MASK_OUT_CORE_NUM ((1 << CORE_NUM_SHIFT_BITS) - 1)
 
-#define STREAM_TO_FD(stream, lcore) (int)(((char *)stream - (char *)RTE_PER_LCORE(_fe) - \
-										   sizeof(struct netfe_lcore)) /                 \
-											  sizeof(struct netfe_stream) +              \
+#define STREAM_TO_FD(stream, lcore) (int)(((char *)stream - (char *)RTE_PER_LCORE(tldk_ctx)->fs) / \
+											  sizeof(struct netfe_stream) +                        \
 										  ((lcore + 1) << CORE_NUM_SHIFT_BITS))
 #define FD_TO_STREAM(fd) (struct netfe_stream *)((fd & MASK_OUT_CORE_NUM) * sizeof(struct netfe_stream) + \
-												 (char *)RTE_PER_LCORE(_fe) + sizeof(struct netfe_lcore))
+												 (char *)RTE_PER_LCORE(tldk_ctx)->fs)
 #define IS_VALID_TLE_FD(fd) (fd & (~CORE_NUM_SHIFT_BITS))
 
 RTE_DEFINE_PER_LCORE(struct netbe_lcore *, _be);
@@ -78,8 +80,6 @@ RTE_DEFINE_PER_LCORE(struct netfe_lcore *, _fe);
  * rte_eth_dev_rss_reta_update.
  */
 #define RSS_RETA_CONF_ARRAY_SIZE (RTE_ETH_RSS_RETA_SIZE_512 / RTE_ETH_RETA_GROUP_SIZE)
-
-static volatile int force_quit;
 
 // static int (*real_accept4)(int, struct sockaddr *, socklen_t *, int);
 // static int (*real_close)(int);
@@ -113,15 +113,30 @@ struct tx_content tx_content = {
 	.data = NULL,
 };
 
-/* function pointers */
-static TLE_RX_BULK_FUNCTYPE tle_rx_bulk;
-static TLE_TX_BULK_FUNCTYPE tle_tx_bulk;
-static TLE_STREAM_RECV_FUNCTYPE tle_stream_recv;
-static TLE_STREAM_CLOSE_FUNCTYPE tle_stream_close;
-
 static int inited = 0;
 
-static LCORE_MAIN_FUNCTYPE lcore_main;
+int verbose = VERBOSE_NONE;
+struct tldk_ctx
+{
+	struct tle_ctx *ctx;
+	struct tle_dev *dev;
+	struct rte_mempool *mp;
+	// struct rte_mempool *frag_mp;
+
+	struct tle_evq *syneq;
+	struct tle_evq *ereq;
+	struct tle_evq *rxeq;
+	struct tle_evq *txeq;
+	struct
+	{
+		uint64_t acc;
+		uint64_t rej;
+		uint64_t ter;
+	} tcp_stat;
+	struct netfe_stream *fs;
+	struct netfe_stream_list free;
+	struct netfe_stream_list use;
+};
 
 #include "common.h"
 #include "parse.h"
@@ -130,135 +145,168 @@ static LCORE_MAIN_FUNCTYPE lcore_main;
 #include "tcp.h"
 #include "udp.h"
 
-int verbose = VERBOSE_NONE;
+RTE_DEFINE_PER_LCORE(struct tldk_ctx *, tldk_ctx);
 
-// static void
-// netbe_lcore_fini(struct netbe_cfg *cfg)
-// {
-// 	uint32_t i;
-
-// 	for (i = 0; i != cfg->cpu_num; i++)
-// 	{
-// 		tle_ctx_destroy(cfg->cpu[i].ctx);
-// 		rte_ip_frag_table_destroy(cfg->cpu[i].ftbl);
-// 		rte_lpm_free(cfg->cpu[i].lpm4);
-// 		rte_lpm6_free(cfg->cpu[i].lpm6);
-
-// 		rte_free(cfg->cpu[i].prtq);
-// 		cfg->cpu[i].prtq_num = 0;
-// 	}
-
-// 	rte_free(cfg->cpu);
-// 	cfg->cpu_num = 0;
-// 	for (i = 0; i != cfg->prt_num; i++)
-// 	{
-// 		rte_free(cfg->prt[i].lcore_id);
-// 		cfg->prt[i].nb_lcore = 0;
-// 	}
-// 	rte_free(cfg->prt);
-// 	cfg->prt_num = 0;
-// }
-
-static int
-netbe_dest_init(const char *fname, struct netbe_cfg *cfg)
+struct rte_mempool *tle_init_pkt_pool(int pkt_num)
 {
-	int32_t rc;
-	uint32_t f, i, p;
-	uint32_t k, l, cnt;
-	struct netbe_lcore *lc;
-	struct netbe_dest_prm prm;
+	int32_t rc = 0;
+	uint32_t lcore_id = rte_lcore_id();
+	int sid = rte_lcore_to_socket_id(lcore_id);
+	// struct rte_mempool *mp, *frag_mp;
+	struct rte_mempool *mp;
+	char name[RTE_MEMPOOL_NAMESIZE];
 
-	rc = netbe_parse_dest(fname, &prm);
-	if (rc != 0)
-		return rc;
-
-	rc = 0;
-	for (i = 0; i != prm.nb_dest; i++)
+	if (pkt_num <= 100)
 	{
-
-		p = prm.dest[i].port;
-		f = prm.dest[i].family;
-
-		cnt = 0;
-		for (k = 0; k != cfg->cpu_num; k++)
-		{
-			lc = cfg->cpu + k;
-			for (l = 0; l != lc->prtq_num; l++)
-				if (lc->prtq[l].port.id == p)
-				{
-					rc = netbe_add_dest(lc, l, f,
-										prm.dest + i, 1);
-					if (rc != 0)
-					{
-						RTE_LOG(ERR, USER1,
-								"%s(lc=%u, family=%u) "
-								"could not add "
-								"destinations(%u)\n",
-								__func__, lc->id, f, i);
-						return -ENOSPC;
-					}
-					cnt++;
-				}
-		}
-
-		if (cnt == 0)
-		{
-			RTE_LOG(ERR, USER1, "%s(%s) error at line %u: "
-								"port %u not managed by any lcore;\n",
-					__func__, fname, prm.dest[i].line, p);
-			break;
-		}
+		pkt_num = MPOOL_NB_BUF;
+	}
+	snprintf(name, sizeof(name), "RX-MP%u", sid);
+	mp = rte_pktmbuf_pool_create(
+		name, pkt_num, MPOOL_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE, sid);
+	if (mp == NULL)
+	{
+		rc = -rte_errno;
+		RTE_LOG(ERR, USER1, "%s(%d) failed with error code: %d\n", __func__, sid, rc);
+		return NULL;
 	}
 
-	free(prm.dest);
+	// snprintf(name, sizeof(name), "frag_MP%u", sid);
+	// frag_mp = rte_pktmbuf_pool_create(
+	// 	name, MPOOL_NB_BUF, MPOOL_CACHE_SIZE, 0, FRAG_MBUF_BUF_SIZE, sid);
+	// if (frag_mp == NULL)
+	// {
+	// 	rc = -rte_errno;
+	// 	RTE_LOG(ERR, USER1, "%s(%d) failed with error code: %d\n", __func__, sid - 1, rc);
+	// 	return rc;
+	// }
+	// RTE_PER_LCORE(tldk_ctx)->frag_mp = frag_mp;
+
+	return mp;
+}
+
+static int lookup4(void *p, const struct in_addr *addr, struct tle_dest *res)
+{
+	int rc = 0;
+	struct rte_mempool *mp = (struct rte_mempool *)p;
+	memset(res, 0, sizeof(struct tle_dest));
+
+	rc = search_best_match_route(mp, addr->s_addr, res);
+
+	RTE_LOG(ERR, USER1, "%s: return dest, rc %d\n", __func__, rc);
 	return rc;
 }
-
-static void
-func_ptrs_init(uint32_t proto)
+static int lookup6(void *opaque, const struct in6_addr *addr, struct tle_dest *res)
 {
-	if (proto == TLE_PROTO_TCP)
-	{
-		tle_rx_bulk = tle_tcp_rx_bulk;
-		tle_tx_bulk = tle_tcp_tx_bulk;
-		tle_stream_recv = tle_tcp_stream_recv;
-		tle_stream_close = tle_tcp_stream_close;
-
-		lcore_main = lcore_main_tcp;
-	}
-	else
-	{
-		tle_rx_bulk = tle_udp_rx_bulk;
-		tle_tx_bulk = tle_udp_tx_bulk;
-		tle_stream_recv = tle_udp_stream_recv;
-		tle_stream_close = tle_udp_stream_close;
-
-		lcore_main = lcore_main_udp;
-	}
+	(void)opaque;
+	(void)addr;
+	(void)res;
+	RTE_LOG(ERR, USER1, "%s: null\n", __func__);
+	return 0;
 }
-void tle_engine(void)
+static struct tle_ctx *tle_init_ctx(struct rte_mempool *mp)
 {
-	netfe_lcore_tcp_req();
-	netfe_lcore_tcp_rst();
-	// netfe_lcore_tcp();
-	netbe_lcore_tcp();
+	int lcore_id = rte_lcore_id();
+	struct tle_ctx_param cprm;
+	struct tle_ctx *ctx;
+	struct tldk_ctx *tldk_ctx = RTE_PER_LCORE(tldk_ctx);
+
+	memset(&cprm, 0, sizeof(struct tle_ctx_param));
+
+	cprm.socket_id = rte_lcore_to_socket_id(lcore_id);
+	cprm.proto = TLE_PROTO_TCP;
+	cprm.max_streams = TLE_MAX_STREAMS;
+	cprm.max_stream_rbufs = cprm.max_stream_sbufs = TLE_MAX_MBUFS;
+	cprm.send_bulk_size = 1;
+	cprm.lookup4 = lookup4;
+	cprm.lookup4_data = mp;
+	cprm.lookup6 = lookup6;
+	cprm.lookup6_data = NULL;
+	cprm.hash_alg = TLE_JHASH;
+	cprm.secret_key.u64[0] = rte_rand();
+	cprm.secret_key.u64[1] = rte_rand();
+	// cprm.icw = 0
+	cprm.timewait = TLE_TCP_TIMEWAIT_DEFAULT;
+
+	tldk_ctx = rte_zmalloc_socket(NULL, sizeof(struct tldk_ctx), RTE_CACHE_LINE_SIZE,
+								  cprm.socket_id);
+
+	if (!tldk_ctx)
+	{
+		RTE_LOG(ERR, USER1, "%s %d: can't allocate tldk_ctx memory\n", __FUNCTION__, __LINE__);
+		exit(EXIT_FAILURE);
+	}
+
+	tldk_ctx->mp = mp;
+	RTE_PER_LCORE(tldk_ctx) = tldk_ctx;
+	ctx = tle_ctx_create(&cprm);
+	RTE_PER_LCORE(tldk_ctx)->ctx = ctx;
+
+	return ctx;
 }
-/***************** socket API ******************************/
-int sock_global_init(int argc, char *argv[])
+
+struct tle_dev *tle_init_dev(struct tle_dev_param *prm)
 {
-	int32_t rc;
-	uint32_t i;
-	struct tle_ctx_param ctx_prm;
-	struct netfe_lcore_prm feprm;
-	// struct rte_eth_stats stats;
-	char fecfg_fname[PATH_MAX + 1];
-	char becfg_fname[PATH_MAX + 1];
-	struct rte_eth_dev_info dev_info;
+	struct tle_ctx *ctx = tle_init_ctx(prm->mp);
+	if (!ctx)
+	{
+		RTE_LOG(ERR, USER1, "%s %d: tle_add_dev return NULL\n", __FUNCTION__, __LINE__);
+		exit(EXIT_FAILURE);
+	}
+	struct tle_dev *dev = tle_add_dev(ctx, prm);
+	if (!dev)
+	{
+		RTE_LOG(ERR, USER1, "%s %d: tle_add_dev return NULL\n", __FUNCTION__, __LINE__);
+		exit(EXIT_FAILURE);
+	}
 
-	fecfg_fname[0] = 0;
-	becfg_fname[0] = 0;
-	memset(g_prm, 0, sizeof(g_prm));
+	// RTE_PER_LCORE(dev) = dev;
+	RTE_PER_LCORE(tldk_ctx)->dev = dev;
 
+	return dev;
+}
+void tle_init_streams(void)
+{
+	int i, sz;
+	int lcore_id = rte_lcore_id();
+	struct tle_evq_param eprm;
+	struct tldk_ctx *tldk_ctx = RTE_PER_LCORE(tldk_ctx);
+
+	// RTE_PER_LCORE(free) = &tldk_ctx->free;
+	// RTE_PER_LCORE(use) = &tldk_ctx->use;
+
+	memset(&eprm, 0, sizeof(eprm));
+	eprm.socket_id = rte_lcore_to_socket_id(lcore_id);
+	eprm.max_events = TLE_MAX_STREAMS;
+
+	tldk_ctx->syneq = tle_evq_create(&eprm);
+	tldk_ctx->ereq = tle_evq_create(&eprm);
+	tldk_ctx->rxeq = tle_evq_create(&eprm);
+	tldk_ctx->txeq = tle_evq_create(&eprm);
+
+	sz = TLE_MAX_STREAMS * sizeof(struct netfe_stream);
+	tldk_ctx->fs = rte_zmalloc_socket(NULL, sz, RTE_CACHE_LINE_SIZE,
+									  eprm.socket_id);
+	if (!tldk_ctx->fs)
+	{
+		RTE_LOG(ERR, USER1, "%s: can't allocate %d memory\n", __func__, sz);
+		exit(EXIT_FAILURE);
+	}
+
+	for (i = 0; i < TLE_MAX_STREAMS; i++)
+	{
+		tldk_ctx->fs[i].rxev = tle_event_alloc(tldk_ctx->rxeq, tldk_ctx->fs + i);
+		tldk_ctx->fs[i].txev = tle_event_alloc(tldk_ctx->txeq, tldk_ctx->fs + i);
+		tldk_ctx->fs[i].erev = tle_event_alloc(tldk_ctx->ereq, tldk_ctx->fs + i);
+		netfe_put_stream(&tldk_ctx->free, tldk_ctx->fs + i);
+	}
+	inited = 1;
+}
+
+/***************** socket API *****************/
+
+/* this hook must be at the very beginning of main*/
+void init_func_hook(void)
+{
 	INIT_FUNC(socket);
 	INIT_FUNC(bind);
 	INIT_FUNC(listen);
@@ -267,120 +315,38 @@ int sock_global_init(int argc, char *argv[])
 	INIT_FUNC(write);
 	INIT_FUNC(connect);
 	INIT_FUNC(close);
+
 	// INIT_FUNC(close);
 	// INIT_FUNC(setsockopt);
 	// INIT_FUNC(shutdown);
 	// INIT_FUNC(writev);
-
-	rc = rte_eal_init(argc, argv);
-	if (rc < 0)
-		rte_exit(EXIT_FAILURE,
-				 "%s: rte_eal_init failed with error code: %d\n",
-				 __func__, rc);
-
-	memset(&ctx_prm, 0, sizeof(ctx_prm));
-	ctx_prm.timewait = TLE_TCP_TIMEWAIT_DEFAULT;
-
-	signal(SIGINT, sig_handle);
-
-	argc -= rc;
-	argv += rc;
-
-	// argv = "--lcores=2,3 ..."
-	rc = parse_app_options(argc, argv, &becfg, &ctx_prm,
-						   fecfg_fname, becfg_fname);
-	if (rc != 0)
-		rte_exit(EXIT_FAILURE,
-				 "%s: parse_app_options failed with error code: %d\n",
-				 __func__, rc);
-
-	/* init all the function pointer */
-	func_ptrs_init(becfg.proto);
-
-	rc = netbe_port_init(&becfg);
-	if (rc != 0)
-		rte_exit(EXIT_FAILURE,
-				 "%s: netbe_port_init failed with error code: %d\n",
-				 __func__, rc);
-
-	rc = netbe_lcore_init(&becfg, &ctx_prm);
-	if (rc != 0)
-		sig_handle(SIGQUIT);
-
-	rc = netbe_dest_init(becfg_fname, &becfg);
-	if (rc != 0)
-		sig_handle(SIGQUIT);
-
-	for (i = 0; i != becfg.prt_num && rc == 0; i++)
-	{
-		RTE_LOG(NOTICE, USER1, "%s: starting port %u\n",
-				__func__, becfg.prt[i].id);
-		rc = rte_eth_dev_start(becfg.prt[i].id);
-		if (rc != 0)
-		{
-			RTE_LOG(ERR, USER1,
-					"%s: rte_eth_dev_start(%u) returned "
-					"error code: %d\n",
-					__func__, becfg.prt[i].id, rc);
-			sig_handle(SIGQUIT);
-		}
-		rte_eth_dev_info_get(becfg.prt[i].id, &dev_info);
-		rc = update_rss_reta(&becfg.prt[i], &dev_info);
-		if (rc != 0)
-			sig_handle(SIGQUIT);
-	}
-
-	feprm.max_streams = ctx_prm.max_streams * becfg.cpu_num;
-
-	rc = (rc != 0) ? rc : netfe_parse_cfg(fecfg_fname, &feprm);
-	if (rc != 0)
-		sig_handle(SIGQUIT);
-
-	for (i = 0; rc == 0 && i != becfg.cpu_num; i++)
-		g_prm[becfg.cpu[i].id].be.lc = becfg.cpu + i;
-
-	rc = (rc != 0) ? rc : netfe_lcore_fill(g_prm, &feprm);
-	if (rc != 0)
-		sig_handle(SIGQUIT);
-
-	return 0;
 }
-int sock_local_init(void)
+
+void tle_engine(void)
 {
-	int32_t rc;
-	uint32_t lcore;
-	struct lcore_prm *prm;
+	net_lcore_tcp_req();
+	net_lcore_tcp_rst();
+	// netfe_lcore_tcp();
+	net_lcore_tcp();
+}
+void tle_input(struct rte_mbuf *pkt[], int num)
+{
+	int32_t rc = 0, n = 0;
+	struct tle_dev *dev = RTE_PER_LCORE(tldk_ctx)->dev;
+	struct rte_mbuf *rp[num];
 
-	lcore = rte_lcore_id();
-	prm = &g_prm[lcore];
-
-	RTE_LOG(NOTICE, USER1, "%s(lcore=%u) start\n",
-			__func__, lcore);
-
-	rc = 0;
-
-	/* lcore FE init. */
-	if (prm->fe.max_streams != 0)
-		rc = netfe_lcore_init_tcp(&prm->fe);
-
-	/* lcore FE init. */
-	if (rc == 0 && prm->be.lc != NULL)
-		rc = netbe_lcore_setup(prm->be.lc);
-
-	if (rc != 0)
+	n = tle_tcp_rx_bulk(dev, pkt, rp, &rc, num);
+	if (num - n > 0)
 	{
-		sig_handle(SIGQUIT);
+		// free rp[num - n]
 	}
-	inited = 1;
-
-	return 0;
 }
 
 int socket(int domain, int type, int protocol)
 {
 	int32_t lcore, fd;
 	struct netfe_stream *fes;
-	struct netfe_lcore *fe = RTE_PER_LCORE(_fe);
+	struct tldk_ctx *tldk_ctx = RTE_PER_LCORE(tldk_ctx);
 
 	if (!inited)
 	{
@@ -395,7 +361,7 @@ int socket(int domain, int type, int protocol)
 		return -1;
 	}
 
-	fes = netfe_get_stream(&fe->free);
+	fes = netfe_get_stream(&tldk_ctx->free);
 
 	if (fes == NULL)
 	{
@@ -411,7 +377,7 @@ int socket(int domain, int type, int protocol)
 	// fes->proto = becfg.proto;
 	// fes->family = sprm->local_addr.ss_family;
 	// fes->laddr = sprm->local_addr;
-	netfe_put_stream(fe, &fe->use, fes);
+	netfe_put_stream(&tldk_ctx->use, fes);
 
 	fd = STREAM_TO_FD(fes, lcore);
 	RTE_LOG(NOTICE, USER1, "socket(%d): fes %p, fd %d\n", lcore, fes, fd);
@@ -426,9 +392,8 @@ int bind(int sd, const struct sockaddr *addr, socklen_t addrlen)
 	const struct sockaddr_in6 *lin6;
 	uint16_t port;
 	int rc;
-	struct netfe_lcore *fe = RTE_PER_LCORE(_fe);
-	struct netbe_lcore *be = RTE_PER_LCORE(_be);
-	struct tle_ctx *ctx = NULL;
+	struct tldk_ctx *tldk_ctx;
+	struct tle_ctx *ctx;
 	struct tle_tcp_stream_param tprm;
 
 	(void)addrlen;
@@ -440,12 +405,12 @@ int bind(int sd, const struct sockaddr *addr, socklen_t addrlen)
 	}
 
 	fes = FD_TO_STREAM(sd);
-
-	ctx = be->ctx;
-	fes->rxev = tle_event_alloc(fe->syneq, fes);
+	tldk_ctx = RTE_PER_LCORE(tldk_ctx);
+	ctx = tldk_ctx->ctx;
+	fes->rxev = tle_event_alloc(tldk_ctx->syneq, fes);
 	if (fes->rxev == NULL)
 	{
-		netfe_stream_close_tcp(fe, fes);
+		netfe_stream_close_tcp(fes);
 		rte_errno = ENOMEM;
 		return -1;
 	}
@@ -477,7 +442,7 @@ int bind(int sd, const struct sockaddr *addr, socklen_t addrlen)
 	if (fes->s == NULL)
 	{
 		rc = rte_errno;
-		netfe_stream_close_tcp(fe, fes);
+		netfe_stream_close_tcp(fes);
 		rte_errno = rc;
 
 		if (addr->sa_family == AF_INET)
@@ -530,11 +495,11 @@ int listen(int sd, int backlog)
 int accept(int sd, struct sockaddr *addr, socklen_t *addrlen)
 {
 	struct netfe_stream *fes = NULL;
-	struct netfe_lcore *fe = RTE_PER_LCORE(_fe);
 	struct netfe_stream *ts;
 	struct tle_stream *rs[TLE_MAX_BACKLOG];
 	struct netfe_stream *fs[TLE_MAX_BACKLOG];
 	struct tle_tcp_stream_cfg prm[TLE_MAX_BACKLOG];
+	struct tldk_ctx *tldk_ctx = RTE_PER_LCORE(tldk_ctx);
 	int i, n, k, lcore;
 
 	// RTE_LOG(NOTICE, USER1, "accept: fes %p, fd %d\n", fes, sockfd);
@@ -567,7 +532,7 @@ int accept(int sd, struct sockaddr *addr, socklen_t *addrlen)
 
 	n = 1;
 	/* get n free streams */
-	k = netfe_get_streams(&fe->free, fs, n);
+	k = netfe_get_streams(&tldk_ctx->free, fs, n);
 	if (n != k)
 	{
 		RTE_LOG(ERR, USER1,
@@ -592,7 +557,7 @@ int accept(int sd, struct sockaddr *addr, socklen_t *addrlen)
 		tle_event_active(ts->txev, TLE_SEV_DOWN);
 		tle_event_active(ts->rxev, TLE_SEV_DOWN);
 
-		netfe_put_stream(fe, &fe->use, ts);
+		netfe_put_stream(&tldk_ctx->use, ts);
 
 		memset(&prm[i], 0, sizeof(prm[i]));
 		prm[i].recv_ev = ts->rxev;
@@ -703,9 +668,7 @@ int connect(int sd, const struct sockaddr *raddr, socklen_t addrlen)
 	struct netfe_stream *fes = NULL;
 	struct sockaddr_in laddr;
 	struct tle_tcp_stream_param tprm;
-	struct netfe_lcore *fe = RTE_PER_LCORE(_fe);
-	struct netbe_lcore *be = RTE_PER_LCORE(_be);
-	struct tle_ctx *ctx = NULL;
+	struct tle_ctx *ctx;
 
 	// NETFE_TRACE("lcore(%d): %s(%d, %p, %zu);\n",
 	// 			rte_lcore_id(), __func__, sd, buf, len);
@@ -715,8 +678,8 @@ int connect(int sd, const struct sockaddr *raddr, socklen_t addrlen)
 		return real_connect(sd, raddr, addrlen);
 	}
 
-	ctx = be->ctx;
 	fes = FD_TO_STREAM(sd);
+	ctx = RTE_PER_LCORE(tldk_ctx)->ctx;
 
 	memset(&laddr, 0, sizeof(laddr));
 	laddr.sin_family = AF_INET;
@@ -735,7 +698,7 @@ int connect(int sd, const struct sockaddr *raddr, socklen_t addrlen)
 	if (fes->s == NULL)
 	{
 		rc = rte_errno;
-		netfe_stream_close_tcp(fe, fes);
+		netfe_stream_close_tcp(fes);
 		rte_errno = rc;
 		return -1;
 	}
@@ -750,7 +713,7 @@ int close(int sd)
 	// int rc;
 	// struct tle_stream *s;
 	struct netfe_stream *fes = NULL;
-	struct netfe_lcore *fe = RTE_PER_LCORE(_fe);
+	struct tldk_ctx *tldk_ctx = RTE_PER_LCORE(tldk_ctx);
 
 	if (!inited || !IS_VALID_TLE_FD(sd))
 	{
@@ -773,228 +736,188 @@ int close(int sd)
 	fes->s = NULL;
 	fes->posterr = 0;
 
-	netfe_rem_stream(&fe->use, fes);
-	netfe_put_stream(fe, &fe->free, fes);
+	netfe_rem_stream(&tldk_ctx->use, fes);
+	netfe_put_stream(&tldk_ctx->free, fes);
 
 	return 0;
 }
-// int setsockopt(int sd, int level, int optname, const void *optval, socklen_t optlen)
-// {
-// 	struct tldk_sock *ts;
 
-// 	FE_TRACE("worker#%lu: %s(%d, %#x, %#x, %p, %d);\n",
-// 			 ngx_worker, __func__, sd, level, optname, optval, optlen);
+/***************** some helper function for example *****************/
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-prototypes"
 
-// 	ts = sd_to_sock(sd);
-// 	if (ts == NULL)
-// 		return real_setsockopt(sd, level, optname, optval, optlen);
-// 	else if (ts->s == NULL)
-// 	{
-// 		errno = EBADF;
-// 		return -1;
-// 	}
+static int
+netbe_dest_init(const char *fname, struct netbe_cfg *cfg)
+{
+	int32_t rc;
+	uint32_t f, i, p;
+	uint32_t k, l, cnt;
+	struct netbe_lcore *lc;
+	struct netbe_dest_prm prm;
 
-// 	return 0;
-// }
+	rc = netbe_parse_dest(fname, &prm);
+	if (rc != 0)
+		return rc;
 
-// static inline uint32_t
-// get_socks(struct tldk_sock_list *list, struct tldk_sock *rs[],
-// 		  uint32_t num)
-// {
-// 	struct tldk_sock *s;
-// 	uint32_t i, n;
+	rc = 0;
+	for (i = 0; i != prm.nb_dest; i++)
+	{
 
-// 	n = RTE_MIN(list->num, num);
-// 	for (i = 0, s = LIST_FIRST(&list->head);
-// 		 i != n;
-// 		 i++, s = LIST_NEXT(s, link))
-// 	{
-// 		rs[i] = s;
-// 	}
+		p = prm.dest[i].port;
+		f = prm.dest[i].family;
 
-// 	/* we retrieved all free entries */
-// 	if (s == NULL)
-// 		LIST_INIT(&list->head);
-// 	else
-// 		LIST_FIRST(&list->head) = s;
+		cnt = 0;
+		for (k = 0; k != cfg->cpu_num; k++)
+		{
+			lc = cfg->cpu + k;
+			for (l = 0; l != lc->prtq_num; l++)
+				if (lc->prtq[l].port.id == p)
+				{
+					rc = netbe_add_dest(lc, l, f,
+										prm.dest + i, 1);
+					if (rc != 0)
+					{
+						RTE_LOG(ERR, USER1,
+								"%s(lc=%u, family=%u) "
+								"could not add "
+								"destinations(%u)\n",
+								__func__, lc->id, f, i);
+						return -ENOSPC;
+					}
+					cnt++;
+				}
+		}
 
-// 	list->num -= n;
-// 	return n;
-// }
+		if (cnt == 0)
+		{
+			RTE_LOG(ERR, USER1, "%s(%s) error at line %u: "
+								"port %u not managed by any lcore;\n",
+					__func__, fname, prm.dest[i].line, p);
+			break;
+		}
+	}
 
-// static inline struct tldk_sock *
-// get_sock(struct tldk_sock_list *list)
-// {
-// 	struct tldk_sock *s;
+	free(prm.dest);
+	return rc;
+}
 
-// 	if (get_socks(list, &s, 1) != 1)
-// 		return NULL;
+int sock_global_init(int argc, char *argv[])
+{
+	int32_t rc;
+	uint32_t i;
+	struct tle_ctx_param ctx_prm;
+	struct netfe_lcore_prm feprm;
+	// struct rte_eth_stats stats;
+	char fecfg_fname[PATH_MAX + 1];
+	char becfg_fname[PATH_MAX + 1];
+	struct rte_eth_dev_info dev_info;
 
-// 	return s;
-// }
+	fecfg_fname[0] = 0;
+	becfg_fname[0] = 0;
+	memset(g_prm, 0, sizeof(g_prm));
 
-// static inline void
-// put_socks(struct tldk_sock_list *list, struct tldk_sock *fs[], uint32_t num)
-// {
-// 	uint32_t i;
+	rc = rte_eal_init(argc, argv);
+	if (rc < 0)
+		rte_exit(EXIT_FAILURE,
+				 "%s: rte_eal_init failed with error code: %d\n",
+				 __func__, rc);
 
-// 	for (i = 0; i != num; i++)
-// 		LIST_INSERT_HEAD(&list->head, fs[i], link);
-// 	list->num += num;
-// }
+	memset(&ctx_prm, 0, sizeof(ctx_prm));
+	ctx_prm.timewait = TLE_TCP_TIMEWAIT_DEFAULT;
 
-// static inline void
-// put_sock(struct tldk_sock_list *list, struct tldk_sock *s)
-// {
-// 	put_socks(list, &s, 1);
-// }
+	signal(SIGINT, sig_handle);
 
-// static inline void
-// rem_sock(struct tldk_sock_list *list, struct tldk_sock *s)
-// {
-// 	LIST_REMOVE(s, link);
-// 	list->num--;
-// }
+	argc -= rc;
+	argv += rc;
 
-// static void
-// term_sock(struct tldk_sock *ts)
-// {
-// 	tle_event_idle(ts->erev);
-// 	tle_event_idle(ts->rxev);
-// 	tle_event_idle(ts->txev);
-// 	tle_tcp_stream_close(ts->s);
-// 	ts->s = NULL;
-// 	ts->posterr = 0;
-// }
+	// argv = "--lcores=2,3 ..."
+	rc = parse_app_options(argc, argv, &becfg, &ctx_prm,
+						   fecfg_fname, becfg_fname);
+	if (rc != 0)
+		rte_exit(EXIT_FAILURE,
+				 "%s: parse_app_options failed with error code: %d\n",
+				 __func__, rc);
 
-// static int32_t
-// close_sock(struct tldk_sock *ts)
-// {
-// 	if (ts->s == NULL)
-// 		return EBADF;
-// 	term_sock(ts);
-// 	rem_sock(&stbl.use, ts);
-// 	put_sock(&stbl.free, ts);
-// 	return 0;
-// }
+	/* init all the function pointer */
+	// func_ptrs_init(becfg.proto);
 
-// static void
-// dump_sock_stats(void)
-// {
-// 	RTE_LOG(NOTICE, USER1, "%s={\n"
-// 						   "nb_accept=%" PRIu64 ";\n"
-// 						   "nb_close=%" PRIu64 ";\n"
-// 						   "nb_readv=%" PRIu64 ";\n"
-// 						   "nb_recv=%" PRIu64 ";\n"
-// 						   "nb_setopts=%" PRIu64 ";\n"
-// 						   "nb_shutdown=%" PRIu64 ";\n"
-// 						   "nb_writev=%" PRIu64 ";\n"
-// 						   "};\n",
-// 			__func__,
-// 			sock_stat.nb_accept,
-// 			sock_stat.nb_close,
-// 			sock_stat.nb_readv,
-// 			sock_stat.nb_recv,
-// 			sock_stat.nb_setopts,
-// 			sock_stat.nb_shutdown,
-// 			sock_stat.nb_writev);
-// }
+	rc = netbe_port_init(&becfg);
+	if (rc != 0)
+		rte_exit(EXIT_FAILURE,
+				 "%s: netbe_port_init failed with error code: %d\n",
+				 __func__, rc);
 
-// /*
-//  * socket API
-//  */
+	rc = netbe_lcore_init(&becfg, &ctx_prm);
+	if (rc != 0)
+		sig_handle(SIGQUIT);
 
-// int shutdown(int sd, int how)
-// {
-// 	struct tldk_sock *ts;
+	rc = netbe_dest_init(becfg_fname, &becfg);
+	if (rc != 0)
+		sig_handle(SIGQUIT);
 
-// 	FE_TRACE("worker#%lu: %s(%d, %#x);\n",
-// 			 ngx_worker, __func__, sd, how);
+	for (i = 0; i != becfg.prt_num && rc == 0; i++)
+	{
+		RTE_LOG(NOTICE, USER1, "%s: starting port %u\n",
+				__func__, becfg.prt[i].id);
+		rc = rte_eth_dev_start(becfg.prt[i].id);
+		if (rc != 0)
+		{
+			RTE_LOG(ERR, USER1,
+					"%s: rte_eth_dev_start(%u) returned "
+					"error code: %d\n",
+					__func__, becfg.prt[i].id, rc);
+			sig_handle(SIGQUIT);
+		}
+		rte_eth_dev_info_get(becfg.prt[i].id, &dev_info);
+		rc = update_rss_reta(&becfg.prt[i], &dev_info);
+		if (rc != 0)
+			sig_handle(SIGQUIT);
+	}
 
-// 	ts = sd_to_sock(sd);
-// 	if (ts == NULL)
-// 		return real_shutdown(sd, how);
+	feprm.max_streams = ctx_prm.max_streams * becfg.cpu_num;
 
-// 	sock_stat.nb_shutdown++;
+	rc = (rc != 0) ? rc : netfe_parse_cfg(fecfg_fname, &feprm);
+	if (rc != 0)
+		sig_handle(SIGQUIT);
 
-// 	errno = ENOTSUP;
-// 	return -1;
-// }
+	for (i = 0; rc == 0 && i != becfg.cpu_num; i++)
+		g_prm[becfg.cpu[i].id].be.lc = becfg.cpu + i;
 
-// int accept4(int sd, struct sockaddr *addr, socklen_t *addrlen, int flags)
-// {
-// 	uint32_t n, slen;
-// 	struct tle_stream *s;
-// 	struct tldk_sock *cs, *ts;
-// 	struct tle_tcp_stream_cfg prm;
-// 	struct tle_tcp_stream_addr sa;
+	rc = (rc != 0) ? rc : netfe_lcore_fill(g_prm, &feprm);
+	if (rc != 0)
+		sig_handle(SIGQUIT);
 
-// 	FE_TRACE("worker#%lu: %s(%d, %p, %p, %#x);\n",
-// 			 ngx_worker, __func__, sd, addr, addrlen, flags);
+	return 0;
+}
 
-// 	ts = sd_to_sock(sd);
-// 	if (ts == NULL)
-// 		return real_accept4(sd, addr, addrlen, flags);
-// 	else if (ts->s == NULL)
-// 	{
-// 		errno = EBADF;
-// 		return -1;
-// 	}
+int sock_local_init(void)
+{
+	int32_t rc;
+	uint32_t lcore;
+	struct lcore_prm *prm;
 
-// 	sock_stat.nb_accept++;
+	lcore = rte_lcore_id();
+	prm = &g_prm[lcore];
 
-// 	n = ts->acpt.num;
-// 	if (n == 0)
-// 	{
-// 		n = tle_tcp_stream_accept(ts->s, ts->acpt.buf,
-// 								  RTE_DIM(ts->acpt.buf));
-// 		if (n == 0)
-// 		{
-// 			errno = EAGAIN;
-// 			return -1;
-// 		}
-// 	}
+	RTE_LOG(NOTICE, USER1, "%s(lcore=%u) start\n",
+			__func__, lcore);
 
-// 	s = ts->acpt.buf[n - 1];
-// 	ts->acpt.num = n - 1;
+	rc = 0;
 
-// 	tle_event_raise(ts->rxev);
+	/* lcore FE init. */
+	// if (prm->fe.max_streams != 0)
+	// 	rc = netfe_lcore_init_tcp(&prm->fe);
 
-// 	cs = get_sock(&stbl.free);
-// 	if (cs == NULL)
-// 	{
-// 		tle_tcp_stream_close(s);
-// 		errno = ENOBUFS;
-// 		return -1;
-// 	}
+	/* lcore FE init. */
+	if (rc == 0 && prm->be.lc != NULL)
+		rc = netbe_lcore_setup(prm->be.lc);
 
-// 	cs->s = s;
-// 	put_sock(&stbl.use, cs);
+	if (rc != 0)
+	{
+		sig_handle(SIGQUIT);
+	}
+	// inited = 1;
 
-// 	tle_event_active(cs->erev, TLE_SEV_DOWN);
-// 	tle_event_active(cs->rxev, TLE_SEV_DOWN);
-// 	tle_event_active(cs->txev, TLE_SEV_DOWN);
-
-// 	memset(&prm, 0, sizeof(prm));
-// 	prm.recv_ev = cs->rxev;
-// 	prm.send_ev = cs->txev;
-// 	prm.err_ev = cs->erev;
-// 	tle_tcp_stream_update_cfg(&s, &prm, 1);
-
-// 	if (tle_tcp_stream_get_addr(s, &sa) == 0)
-// 	{
-
-// 		if (sa.remote.ss_family == AF_INET)
-// 			slen = sizeof(struct sockaddr_in);
-// 		else if (sa.remote.ss_family == AF_INET6)
-// 			slen = sizeof(struct sockaddr_in6);
-// 		else
-// 			slen = 0;
-
-// 		slen = RTE_MIN(slen, *addrlen);
-// 		memcpy(addr, &sa.remote, slen);
-// 		*addrlen = slen;
-// 	}
-
-// 	return SOCK_TO_SD(cs);
-// }
+	return 0;
+}
+#pragma GCC diagnostic pop

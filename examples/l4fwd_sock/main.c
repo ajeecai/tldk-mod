@@ -13,11 +13,19 @@
  * limitations under the License.
  */
 #include <unistd.h>
+#include <arpa/inet.h>
+
 #include "tle_sock.h"
+
+int sock_global_init(int argc, char *argv[]);
+int sock_local_init(void);
 
 int main(int argc, char *argv[])
 {
-	/////////// socket start //////////////
+	/////////// hook socket api //////////////////
+	init_func_hook();
+
+	/////////// rte eal initializtion ///////////
 	int lcore = rte_lcore_id();
 	int rc = 0;
 	int listen_fd = -1, srv_fd = -1, clnt_fd = -1;
@@ -37,6 +45,42 @@ int main(int argc, char *argv[])
 		exit(-1);
 	}
 
+	/////// socket layer initializtion ////////
+	struct rte_mempool *mp = NULL;
+
+	mp = tle_init_pkt_pool(0);
+
+	struct tle_dev_param dprm;
+	struct tle_dev *dev;
+	uint32_t nb_bl_ports = 1;
+	uint16_t bl_ports[1] = {0};
+	struct in_addr local_addr;
+
+	memset(&dprm, 0, sizeof(struct tle_dev_param));
+	dprm.bl4.nb_port = nb_bl_ports;
+	dprm.bl6.nb_port = nb_bl_ports;
+	dprm.bl4.port = bl_ports;
+	dprm.bl6.port = bl_ports;
+	dprm.mp = mp;
+
+	memset(&local_addr, 0, sizeof(local_addr));
+	// local_addr.sin_family = AF_INET;
+	local_addr.s_addr = inet_addr("192.168.10.243");
+	dprm.local_addr4 = local_addr;
+
+	dprm.port_id = 0;
+	dprm.queue_id = 0;
+	// dprm.rx_offload
+	// dprm.tx_offload
+
+	dev = tle_init_dev(&dprm);
+	tle_init_streams();
+
+	add_route(inet_addr("0.0.0.0"),
+			  inet_addr("0.0.0.0"), inet_addr("192.168.10.243"),
+			  "\x00\x50\x56\xba\x8f\xf5", dev, 0);
+
+	////////// socket API calling //////////
 	listen_fd = socket(AF_INET, SOCK_STREAM, 0);
 	if (listen_fd == -1)
 	{

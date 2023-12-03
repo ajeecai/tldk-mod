@@ -23,9 +23,12 @@
 #include "stream.h"
 #include "misc.h"
 #include <halfsiphash.h>
+#include "tle_tcp.h"
 
 #define	LPORT_START	0x8000
 #define	LPORT_END	MAX_PORT_NUM
+
+RTE_DECLARE_PER_LCORE(struct tldk_ctx *, tldk_ctx);
 
 #define	LPORT_START_BLK	PORT_BLK(LPORT_START)
 #define	LPORT_END_BLK	PORT_BLK(LPORT_END)
@@ -209,7 +212,9 @@ tle_add_dev(struct tle_ctx *ctx, const struct tle_dev_param *dev_prm)
 
 	dev = find_free_dev(ctx);
 	if (dev == NULL)
+	{
 		return NULL;
+	}
 	rc = 0;
 
 	/* device can handle IPv4 traffic */
@@ -238,6 +243,15 @@ tle_add_dev(struct tle_ctx *ctx, const struct tle_dev_param *dev_prm)
 	}
 
 	/* setup TX data. */
+	for (int i = 0; dev_prm->mp && i < MAX_PKT_BURST; i++)
+	{
+		dev->tx_pkt_buf[i] = rte_pktmbuf_alloc(dev_prm->mp);
+		if (dev->tx_pkt_buf[i] == NULL)
+		{
+			exit(EXIT_FAILURE);
+		}
+	}
+
 	df = ((ctx->prm.flags & TLE_CTX_FLAG_ST) == 0) ? 0 :
 		RING_F_SP_ENQ | RING_F_SC_DEQ;
 	tle_dring_reset(&dev->tx.dr, df);
@@ -260,6 +274,89 @@ tle_add_dev(struct tle_ctx *ctx, const struct tle_dev_param *dev_prm)
 	ctx->nb_dev++;
 
 	return dev;
+}
+
+int tle_dev_rx(struct tle_dev *dev)
+{
+
+	uint32_t j, k, n;
+	struct rte_mbuf *pkt[MAX_PKT_BURST];
+	struct rte_mbuf *rp[MAX_PKT_BURST];
+	int32_t rc[MAX_PKT_BURST];
+
+	if (!dev->prm.pkt_rx_func)
+	{
+		dev->prm.pkt_rx_func = rte_eth_rx_burst;
+	}
+
+	n = dev->prm.pkt_rx_func(dev->prm.port_id,
+							 dev->prm.queue_id, pkt, RTE_DIM(pkt));
+
+	if (n != 0)
+	{
+		dev->rx_stat.in += n;
+
+		k = tle_tcp_rx_bulk(dev, pkt, rp, rc, n);
+
+		dev->rx_stat.up += k;
+		dev->rx_stat.drop += n - k;
+
+		for (j = 0; j != n - k; j++)
+		{
+			rte_pktmbuf_free(rp[j]);
+		}
+	}
+	return n - k;
+}
+
+int tle_dev_tx(struct tle_dev *dev)
+{
+	uint32_t j = 0, k, n;
+	struct rte_mbuf **mb;
+
+	n = dev->tx_pkt_num;
+	k = RTE_DIM(dev->tx_pkt_buf) - n;
+	mb = dev->tx_pkt_buf;
+
+	if (!dev->prm.pkt_tx_func)
+	{
+		dev->prm.pkt_tx_func = rte_eth_tx_burst;
+	}
+
+	// if (k >= RTE_DIM(dev->tx_buf.pkt) / 2)
+	{
+		j = tle_tcp_tx_bulk(dev, mb + n, k);
+		n += j;
+		dev->tx_stat.down += j;
+	}
+
+	if (n == 0)
+	{
+		return -1;
+	}
+
+	printf("%s: tle_tcp_tx_bulk(%p) returns %u,\n"
+		   "total pkts to send: %u\n",
+		   __func__, dev, j, n);
+
+	// for (j = 0; j != n; j++)
+	// 	BE_PKT_DUMP(mb[j]);
+
+	k = dev->prm.pkt_tx_func(dev->prm.port_id,
+							 dev->prm.queue_id, mb, RTE_DIM(mb));
+
+	dev->tx_stat.out += k;
+	dev->tx_stat.drop += n - k;
+	printf("%s: rte_eth_tx_burst(%u, %u, %u) returns %u\n",
+		   __func__, dev->prm.port_id,
+		   dev->prm.queue_id, n, k);
+
+	dev->tx_pkt_num = n - k;
+	if (k != 0)
+		for (j = k; j != n; j++)
+			mb[j - k] = mb[j];
+
+	return 0;
 }
 
 static void

@@ -46,6 +46,22 @@ struct tle_dev {
 	} tx;
 	struct tle_dev_param prm; /* copy of device parameters. */
 	struct tle_dport *dp[TLE_VNUM]; /* device L4 ports */
+
+	struct rte_mbuf *tx_pkt_buf[MAX_PKT_BURST];
+	int tx_pkt_num;
+
+	struct
+	{
+		uint64_t in;
+		uint64_t up;
+		uint64_t drop;
+	} rx_stat;
+	struct
+	{
+		uint64_t down;
+		uint64_t out;
+		uint64_t drop;
+	} tx_stat;
 };
 
 struct tle_ctx {
