@@ -61,7 +61,7 @@ rx_obtain_listen_stream(const struct tle_dev *dev, const union pkt_info *pi,
 	s = (struct tle_tcp_stream *)dev->dp[type]->streams[pi->port.dst];
 	if (s == NULL || tcp_stream_acquire(s) < 0)
 	{
-		RTE_LOG(ERR, USER1, "%s %d: can't find lisnter on %d\n", __FUNCTION__, __LINE__, ntohs(pi->port.dst));
+		RTE_LOG(ERR, USER1, "%s %d: can't find listener on %d\n", __FUNCTION__, __LINE__, ntohs(pi->port.dst));
 		return NULL;
 	}
 
@@ -82,7 +82,7 @@ rx_obtain_stream(const struct tle_dev *dev, struct stbl *st,
 
 	s = stbl_find_data(st, pi);
 	if (s == NULL) {
-		if (pi->tf.flags == TCP_FLAG_ACK)
+		if (pi->tf.flags & TCP_FLAG_ACK)
 			return rx_obtain_listen_stream(dev, pi, type);
 		return NULL;
 	}
@@ -946,7 +946,7 @@ rx_ack_listen(struct tle_tcp_stream *s, struct stbl *st,
 
 	*csp = NULL;
 
-	if (pi->tf.flags != TCP_FLAG_ACK || rx_check_stream(s, pi) != 0)
+	if (!(pi->tf.flags & TCP_FLAG_ACK) || rx_check_stream(s, pi) != 0)
 		return -EINVAL;
 
 	ctx = s->s.ctx;
